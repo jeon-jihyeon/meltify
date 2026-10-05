@@ -4,7 +4,7 @@ description: Read text in images, screenshots, photos and scanned PDF pages with
 license: MIT
 compatibility: Needs uv or meltify on PATH. Apple Vision runs on macOS. PaddleOCR needs the ocr-paddle extra. LLM engines need their API key.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   cli: meltify ocr
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write
 ---
@@ -12,6 +12,8 @@ allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Writ
 # meltify ocr
 
 A single OCR pass misreads digits and Korean. This reads the same prepared image with several engines and flags every disagreement.
+
+For a whole folder, or documents with pictures inside, run the meltify-read skill first. It OCRs every image and scanned page in one pass. Use this skill for a focused look at one image or page: a disputed or unchecked value from `read`, a paid engine, your own reading or the `--equalize` and `--compare` options.
 
 ## Run
 

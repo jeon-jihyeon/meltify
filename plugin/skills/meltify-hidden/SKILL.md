@@ -4,7 +4,7 @@ description: Find text a PDF carries but a reader doesn't see, such as white or 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   cli: meltify hidden
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---

@@ -4,7 +4,7 @@ description: Turn a video, screen recording, phone call recording or video URL i
 license: MIT
 compatibility: Needs uv or meltify on PATH and ffmpeg. URLs need the media extra and deno for YouTube. Speech recognition needs the asr-mlx extra on Apple Silicon, whisper-cpp or an API key.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   cli: meltify media
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -12,6 +12,8 @@ allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 # meltify media
 
 You can't watch video. This turns it into frames and text, with a time on every item.
+
+When recordings sit in a folder with other files, the meltify-read skill already transcribes them and OCRs up to 20 scene frames each. Use this skill for focused work on one video: full-resolution frames to look at, a time window, denser frames or captions only.
 
 ## Run
 
