@@ -23,30 +23,63 @@ def _num(v: float) -> str:
 
 @dataclass(frozen=True)
 class Src:
-    """Where a value came from in the original input"""
+    """Where a value came from in the original input
+
+    The cite joins the set fields in this fixed order, each one optional:
+
+        path ("#att=" member)* ["#" jpath] ["#" anchor] ["#s" section] ["#p" page]
+        ["#slide" slide] ["#" sheet ["!" cell] | "#cell=" cell] ["#para" para]
+        ["#ts=" ts] ["#img" img] ["@" unit "(" x0,y0,x1,y1 ")"] ["@" start "-" end]
+        [":" line]
+
+    Each container level adds one `#att=`, so `/` inside a member stays a directory:
+    `a.zip#att=docs/b.pdf#p3`, `a.zip#att=x.zip#att=c.txt:1`, `mail.eml#att=inv.png@px(1,2,3,4)`
+    """
 
     path: str
     page: int | None = None
     bbox: tuple[float, float, float, float] | None = None
     unit: str | None = None  # pt for PDF space, px for images
     t: tuple[float, float] | None = None  # seconds
-    sheet: str | None = None
-    cell: str | None = None
+    sheet: str | None = None  # also a table path like `Sheet>Table` or a database table
+    cell: str | None = None  # `B2` under a sheet, a notebook cell index without one
     line: int | None = None
-    part: str | None = None  # attachment or archive member inside path
+    parts: tuple[str, ...] = ()  # attachment or archive members, outermost first
     jpath: str | None = None  # JSONPath inside a structured file
+    anchor: str | None = None  # fragment id inside a web page
+    section: int | None = None
+    slide: int | None = None
+    para: int | None = None
+    img: int | None = None  # embedded image index within its page, slide or document
+    ts: str | None = None  # message timestamp id in a chat export
+
+    def inside(self, member: str) -> Src:
+        """Root of a member nested one level deeper in this container"""
+        return Src(self.path, parts=(*self.parts, member))
 
     def cite(self) -> str:
         # Stable one-line form an agent can paste next to a claim
-        out = self.path
-        if self.part:
-            out += f"#att={self.part}"
+        out = self.path + "".join(f"#att={p}" for p in self.parts)
         if self.jpath:
             out += f"#{self.jpath}"
+        if self.anchor:
+            out += f"#{self.anchor}"
+        if self.section is not None:
+            out += f"#s{self.section}"
         if self.page is not None:
             out += f"#p{self.page}"
+        if self.slide is not None:
+            out += f"#slide{self.slide}"
         if self.sheet:
             out += f"#{self.sheet}" + (f"!{self.cell}" if self.cell else "")
+        elif self.cell:
+            out += f"#cell={self.cell}"
+        if self.para is not None:
+            out += f"#para{self.para}"
+        if self.ts:
+            out += f"#ts={self.ts}"
+        if self.img is not None:
+            out += f"#img{self.img}"
         if self.bbox is not None:
             out += f"@{self.unit or 'px'}(" + ",".join(_num(v) for v in self.bbox) + ")"
         if self.t is not None:
@@ -56,7 +89,7 @@ class Src:
         return out
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        return {k: v for k, v in asdict(self).items() if v is not None and v != ()}
 
 
 def finding(src: Src, **values: Any) -> dict[str, Any]:

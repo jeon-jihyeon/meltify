@@ -4,7 +4,7 @@ description: Check which meltify engines, binaries and API keys are available on
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   cli: meltify doctor
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---
@@ -24,6 +24,7 @@ Report what meltify can use on this machine and how to fix what's missing.
 - A failed row carries a `hint` with the install command
 - API keys are only reported as set or unset. Never print or ask for their values
 - `ocr *` and `asr *` rows say which engines are ready right now
+- `bin soffice` covers `.ppt` and the `.doc` fallback, `lib libarchive` 7z and rar, and `browser chrome` `read --render`
 - `--probe` makes one tiny paid call per configured key and reports the HTTP status
 
 ## Gotchas
@@ -34,5 +35,6 @@ Report what meltify can use on this machine and how to fix what's missing.
 ## Then
 
 1. Tell the user which failed checks block the task at hand, and give the hint for each.
-2. Don't install anything without the user's go-ahead. Once you have it, run `meltify doctor --install office`, `media`, `asr-mlx` or `ocr-paddle`. The extra goes into a venv in the data dir, which the launcher runs ahead of any other meltify on PATH.
-3. Missing optional engines are fine when another engine covers the task.
+2. Don't install anything without the user's go-ahead. Once you have it, run `meltify doctor --install NAME` with the extra the hint names: `office` for Word, PowerPoint, Outlook, `.doc` and `.xls`, `archive` for 7z and rar, `iwork` for Numbers, `render` for `read --render`, `media` for video URLs, `asr-mlx` or `ocr-paddle` for local engines. The extra goes into a venv in the data dir, which the launcher runs ahead of any other meltify on PATH. `render` also downloads Chromium when Chrome isn't installed.
+3. `bin soffice` and `lib libarchive` are system packages, not extras. Give the user the hint instead of installing them yourself.
+4. Missing optional engines are fine when another engine covers the task.
