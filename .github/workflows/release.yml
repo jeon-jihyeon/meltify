@@ -7,6 +7,10 @@ on:
 # Each job gets only the scope it needs, so the build never holds a publish token
 permissions: {}
 
+env:
+  # uv.lock records a 7 day release-age cutoff, so CI resolves with the same one
+  UV_EXCLUDE_NEWER: 7 days
+
 jobs:
   build:
     runs-on: ubuntu-latest
