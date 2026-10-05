@@ -1,0 +1,47 @@
+# Project settings for meltify, found by searching from the working directory up to the git root
+# Outside a git repository, only the working directory is searched
+# Every key is optional and falls back to the packaged defaults
+
+lang = "ko"
+out_dir = "meltify-out"
+
+[llm]
+claude_model = "claude-opus-5-5"
+gemini_model = "gemini-3-pro"
+openai_model = "gpt-5.5"
+
+[ocr]
+# auto uses installed local engines only. List paid ones here to add them
+engines = "auto"
+upscale = 3
+dpi = 300
+
+[asr]
+engine = "auto"
+model = "mlx-community/whisper-large-v3-turbo"
+
+[media]
+fps = 1.0
+scene = 0.3
+sub_langs = ["ko", "en"]
+
+[submit]
+url = "http://127.0.0.1:8765/submit"
+gap = 61
+field = "file"
+score_path = "result.similarity"
+goal = "max"
+until_score = 0.95
+
+[check]
+schema = "answer.schema.json"
+count = 30
+unique = ["id"]
+
+[[check.field]]
+path = "$[*].id"
+pattern = "item_[0-9]{3}"
+
+[brief]
+root = "problems"
+template = "en"

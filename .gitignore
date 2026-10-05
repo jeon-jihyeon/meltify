@@ -1,0 +1,24 @@
+# build output
+/dist
+/build
+*.egg-info
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# local output, notes and settings
+/meltify-out/
+.claude/settings.local.json
+CLAUDE.local.md
+/tmp
+
+# environment
+.env*
+!.env.example
+
+# editors and the OS
+.vscode
+.idea
+*.swp
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "answer"],
+    "additionalProperties": false,
+    "properties": {
+      "id": {"type": "string"},
+      "answer": {"enum": ["Approve", "Deny"]},
+      "reason": {"type": ["integer", "null"], "minimum": 1}
+    },
+    "if": {"properties": {"answer": {"const": "Approve"}}},
+    "then": {"properties": {"reason": {"type": "null"}}}
+  }
+}
