@@ -165,14 +165,19 @@ def pptx_images(path: Path, src: Src) -> Embeds:
 
 
 def convert(path: Path, src: Src) -> Converted:
-    if importlib.util.find_spec("markitdown") is None:
-        raise MissingTool("markitdown", "meltify doctor --install office")
-    from markitdown import MarkItDown
-
-    text = MarkItDown().convert(str(path)).markdown
-    out = Converted("office", [Block(src, text)] if text.strip() else [])
     suffix = path.suffix.lower()
     pictures = {".docx": docx_images, ".pptx": pptx_images}.get(suffix)
-    if pictures is not None and zipfile.is_zipfile(path):
+    has_pictures = pictures is not None and zipfile.is_zipfile(path)
+    if importlib.util.find_spec("markitdown") is None:
+        if not has_pictures:
+            raise MissingTool("markitdown", "meltify doctor --install office")
+        # Pictures come straight from the zip, so they're still worth reading without the text
+        out = Converted("office", needs=["markitdown"])
+    else:
+        from markitdown import MarkItDown
+
+        text = MarkItDown().convert(str(path)).markdown
+        out = Converted("office", [Block(src, text)] if text.strip() else [])
+    if has_pictures:
         pictures(path, src).into(out)
     return out

@@ -150,7 +150,9 @@ def test_same_picture_in_several_files_reads_once_and_never_on_rerun(cached, mon
     rows, out = _read(capsys, folder)
     assert (len(vision.calls), len(paddle.calls)) == (2, 2)
     assert "(2 cached)" in out["summary"]
-    assert all(not r["needs"] or "not read" in r["needs"][0] for r in rows.values())
+    # The office extra is optional, so its own need may or may not be listed
+    leftover = [n for r in rows.values() for n in r["needs"] if n != "markitdown"]
+    assert all("not read" in n for n in leftover)
 
     _read(capsys, folder, "--refresh")
     assert len(vision.calls) == 4
@@ -417,5 +419,22 @@ def test_shallow_lists_needs_like_01_and_loads_nothing(cached, monkeypatch, caps
     # 0.1 never looked for pictures inside documents
     assert rows[str(pdf)]["needs"] == ["ocr pages 3"]
     assert "#img" not in Path(rows[str(pdf)]["out"]).read_text()
-    assert rows[str(docx)]["needs"] == ["1 emf image not read", "1 linked image not read"]
+    docx_needs = [n for n in rows[str(docx)]["needs"] if n != "markitdown"]
+    assert docx_needs == ["1 emf image not read", "1 linked image not read"]
     assert called == []
+
+
+def test_docx_pictures_are_read_without_the_office_extra(cached, monkeypatch, capsys):
+    import importlib.util
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda n, *a: None if n == "markitdown" else real(n, *a)
+    )
+    monkeypatch.setattr(engines, "select", lambda spec, s: [])
+    docx = embedded_docx(cached / "memo.docx", card("A", (300, 100)))
+    rows, _ = _read(capsys, docx)
+    needs = rows[str(docx)]["needs"]
+    assert "markitdown" in needs
+    # With no engine at hand the picture is still found and listed for OCR
+    assert any(n.startswith("ocr") for n in needs)

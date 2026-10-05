@@ -33,3 +33,6 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run python scripts/sync_version.py --check
       - run: uv run pytest -m "not llm and not heavy"
+      # Run again with the common extras so their converters are covered too
+      - run: uv sync --locked --extra office --extra archive
+      - run: uv run pytest -m "not llm and not heavy"
