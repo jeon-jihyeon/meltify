@@ -4,7 +4,7 @@ description: Quote every condition sentence of a written problem statement with 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   cli: meltify brief
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write Edit
 ---

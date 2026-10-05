@@ -1,9 +1,9 @@
 [project]
 name = "meltify"
-version = "0.1.0"
+version = "0.2.0"
 description = "Melt files of any format into prompt-ready text where every line cites its source"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "jeon-jihyeon" }]
@@ -13,17 +13,24 @@ dependencies = [
   "openpyxl>=3.1",
   "httpx>=0.27",
   "jsonschema>=4.23",
-  "pillow>=11",
+  "pillow>=11.3",
+  "pi-heif>=1",
   "numpy>=2",
   "ocrmac>=1.0.1; sys_platform == 'darwin'",
+  "trafilatura>=2",
+  "python-hwpx>=1",
+  "striprtf>=0.0.29",
 ]
 
 [project.optional-dependencies]
-office = ["markitdown[docx,pptx,outlook]>=0.1.8"]
+office = ["markitdown[docx,pptx,outlook]>=0.1.8", "python-calamine>=0.4", "legacy-doc>=0.2"]
+archive = ["libarchive-c>=5"]
+iwork = ["numbers-parser>=4"]
+render = ["playwright>=1.50"]
 media = ["yt-dlp>=2026.8.19"]
 asr-mlx = ["mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 ocr-paddle = ["paddleocr>=3.2", "paddlepaddle>=3.2"]
-all = ["meltify[office,media,asr-mlx]"]
+all = ["meltify[office,media,asr-mlx,archive]"]
 
 [project.urls]
 Repository = "https://github.com/jeon-jihyeon/meltify"

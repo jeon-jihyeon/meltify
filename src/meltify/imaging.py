@@ -6,7 +6,54 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    from pi_heif import register_heif_opener
+except ImportError:  # an older install without the base dependency still reads other formats
+    pass
+else:
+    # Pillow can't decode HEIC on its own, and iPhone photos default to it
+    register_heif_opener()
+
 SHARPEN = (0, -1, 0, -1, 5, -1, 0, -1, 0)
+
+# Shorter than this is an icon, a bullet or a tracking pixel, never worth an OCR call
+MIN_SIDE = 48
+# Engines read small text best once the short side reaches about this many pixels
+SHORT_TARGET = 1000
+# Past this, upscaling only slows the engines down, and huge scans get scaled down to it
+LONG_MAX = 4000
+UPSCALE_MAX = 4.0
+
+
+def auto_factor(width: int, height: int) -> float:
+    """Resize factor that lifts small images toward SHORT_TARGET and never makes them huge"""
+    grow = min(max(1.0, SHORT_TARGET / max(1, min(width, height))), UPSCALE_MAX)
+    return round(min(grow, LONG_MAX / max(1, width, height)), 3)
+
+
+def image_size(data: bytes) -> tuple[int, int] | None:
+    """Pixel size from the header alone, or None when Pillow can't parse it"""
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            return im.size
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        return None
+
+
+def flatten(image: Any) -> Any:
+    """RGB on a white background, so transparent text doesn't turn black"""
+    from PIL import Image
+
+    if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
+        rgba = image.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, "white")
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        return bg
+    return image.convert("RGB")
 
 
 def upscale(image: Any, factor: float, sharpen: bool) -> Any:

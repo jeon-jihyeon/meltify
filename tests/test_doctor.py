@@ -57,3 +57,71 @@ def test_install_creates_venv_and_marker(monkeypatch, tmp_path, capsys):
     assert calls[0][:2] == ["uv", "venv"]
     assert calls[1][-1].endswith("[media]")
     assert (tmp_path / "data/venv/.meltify-version").read_text() == doctor.__version__
+
+
+def test_doctor_lists_the_new_formats(monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main(["doctor", "--json"]) == 0
+    checks = {r["check"]: r for r in json.loads(capsys.readouterr().out)["results"]}
+    for module in ("trafilatura", "hwpx", "striprtf", "pi_heif"):
+        assert checks[f"module {module}"]["ok"] is True
+    for module in ("libarchive", "legacy_doc", "python_calamine", "numbers_parser", "playwright"):
+        assert f"module {module}" in checks
+    assert checks["bin soffice"]["used_by"] == "read ppt, doc fallback"
+
+
+def test_system_parts_flag_a_binding_without_its_library(monkeypatch):
+    import importlib.util
+
+    from meltify.converters import archive, legacy
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda n, *a: object() if n in ("libarchive", "playwright") else real(n, *a),
+    )
+    monkeypatch.setattr(archive, "_libarchive_ready", lambda: False)
+    monkeypatch.setattr(legacy, "soffice", lambda: None)
+    monkeypatch.setattr(doctor, "chrome", lambda: None)
+    rows = {r["check"]: r for r in doctor.system_parts()}
+    assert rows["bin soffice"]["ok"] is False
+    assert "libreoffice" in rows["bin soffice"]["hint"]
+    assert rows["lib libarchive"]["ok"] is False
+    assert rows["lib libarchive"]["hint"].startswith("brew install libarchive")
+    assert rows["browser chrome"]["ok"] is False
+
+
+def _fake_install(monkeypatch, tmp_path, calls):
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        if args[1] == "venv":
+            (tmp_path / "data/venv/bin").mkdir(parents=True)
+            (tmp_path / "data/venv/bin/python").write_text("")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setattr(safe, "run", fake_run)
+    monkeypatch.setattr(safe, "require_binary", lambda name, hint: "uv")
+
+
+def test_install_render_downloads_chromium_only_without_chrome(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    _fake_install(monkeypatch, tmp_path, calls)
+    monkeypatch.setattr(doctor, "chrome", lambda: None)
+    assert main(["doctor", "--install", "render"]) == 0
+    assert calls[1][-1].endswith("[render]")
+    assert calls[2][1:] == ["-m", "playwright", "install", "chromium"]
+
+    calls.clear()
+    monkeypatch.setattr(doctor, "chrome", lambda: "/usr/bin/google-chrome")
+    assert main(["doctor", "--install", "render"]) == 0
+    assert not any("playwright" in c for c in calls)
+
+
+def test_install_accepts_the_new_extras(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    _fake_install(monkeypatch, tmp_path, calls)
+    for extra in ("archive", "iwork"):
+        assert main(["doctor", "--install", extra]) == 0
+        assert calls[-1][-1].endswith(f"[{extra}]")

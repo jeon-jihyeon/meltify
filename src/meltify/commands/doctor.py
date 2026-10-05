@@ -27,7 +27,16 @@ MODULES = [
     ("numpy", "ocr media", "pip install meltify", True),
     ("jsonschema", "check", "pip install meltify", True),
     ("httpx", "submit ocr", "pip install meltify", True),
+    ("trafilatura", "read urls", "pip install meltify", True),
+    ("hwpx", "read hwp hwpx", "pip install meltify", True),
+    ("striprtf", "read rtf", "pip install meltify", True),
+    ("pi_heif", "read ocr heic avif", "pip install meltify", True),
     ("markitdown", "read docx pptx msg", "meltify doctor --install office", False),
+    ("python_calamine", "read xls", "meltify doctor --install office", False),
+    ("legacy_doc", "read doc", "meltify doctor --install office", False),
+    ("libarchive", "read 7z rar", "meltify doctor --install archive", False),
+    ("numbers_parser", "read numbers", "meltify doctor --install iwork", False),
+    ("playwright", "read --render", "meltify doctor --install render", False),
     ("yt_dlp", "media urls", "meltify doctor --install media", False),
     ("paddleocr", "ocr engine paddle", "meltify doctor --install ocr-paddle", False),
 ]
@@ -43,13 +52,20 @@ BINARIES = [
     ("whisper-cli", "asr engine whispercpp", "brew install whisper-cpp"),
     ("uv", "launcher and --install", "https://docs.astral.sh/uv/"),
 ]
+SOFFICE_HINT = "brew install --cask libreoffice or apt install libreoffice"
+# Where Playwright's `channel="chrome"` looks first, so --render can skip its own Chromium
+CHROME = (
+    Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    Path("/opt/google/chrome/chrome"),
+)
+EXTRAS = ["office", "archive", "iwork", "render", "media", "asr-mlx", "ocr-paddle", "all"]
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--quick", action="store_true", help="skip binaries and optional modules")
     p.add_argument(
         "--install",
-        choices=["office", "media", "asr-mlx", "ocr-paddle", "all"],
+        choices=EXTRAS,
         help="install an optional extra into the launcher's venv in the data dir",
     )
     p.add_argument("--probe", action="store_true", help="make one tiny paid call per API key")
@@ -101,6 +117,7 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
             rows.append(
                 _row(f"bin {binary}", path is not None, path or "not on PATH", used_by, hint)
             )
+        rows += system_parts()
         out = Path(settings.get("out_dir", "."))
         probe = out if out.exists() else Path.cwd()
         free = shutil.disk_usage(probe).free / 2**30
@@ -109,6 +126,52 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
         )
 
     rows.append(_row("data dir", True, str(data_dir(env))))
+    return rows
+
+
+def chrome() -> str | None:
+    found = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+    return found or next((str(p) for p in CHROME if p.exists()), None)
+
+
+def system_parts() -> list[dict[str, Any]]:
+    """Programs and shared libraries outside the venv that some formats lean on"""
+    from meltify.converters.archive import _libarchive_ready
+    from meltify.converters.legacy import soffice
+
+    binary = soffice()
+    rows = [
+        _row(
+            "bin soffice",
+            binary is not None,
+            binary or "not found",
+            "read ppt, doc fallback",
+            SOFFICE_HINT,
+        )
+    ]
+    # libarchive-c is only a binding, so the shared library has to be there as well
+    if importlib.util.find_spec("libarchive") is not None:
+        ready = _libarchive_ready()
+        rows.append(
+            _row(
+                "lib libarchive",
+                ready,
+                "loaded" if ready else "binding installed, shared library missing",
+                "read 7z rar",
+                "brew install libarchive or apt install libarchive13",
+            )
+        )
+    if importlib.util.find_spec("playwright") is not None:
+        found = chrome()
+        rows.append(
+            _row(
+                "browser chrome",
+                found is not None,
+                found or "not found, --render needs Playwright's Chromium",
+                "read --render",
+                "meltify doctor --install render",
+            )
+        )
     return rows
 
 
@@ -172,9 +235,19 @@ def install(extra: str, env: dict[str, str]) -> list[dict[str, Any]]:
         spec = f"meltify[{extra}] @ git+https://github.com/jeon-jihyeon/meltify@v{__version__}"
     else:
         spec = f"meltify[{extra}]=={__version__}"
-    safe.run([uv, "pip", "install", "--quiet", "--python", str(venv / "bin" / "python"), spec])
+    python = str(venv / "bin" / "python")
+    safe.run([uv, "pip", "install", "--quiet", "--python", python, spec])
+    rows = [_row(f"install {extra}", True, str(venv), "launcher", "")]
+    if extra == "render":
+        # --render drives the installed Chrome first, so only download Chromium without one
+        found = chrome()
+        if found is None:
+            safe.run([python, "-m", "playwright", "install", "chromium"])
+        rows.append(
+            _row("browser chrome", True, found or "Playwright Chromium", "read --render", "")
+        )
     (venv / ".meltify-version").write_text(__version__, encoding="utf-8")
-    return [_row(f"install {extra}", True, str(venv), "launcher", "")]
+    return rows
 
 
 def probe(settings: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]:

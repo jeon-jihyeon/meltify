@@ -59,3 +59,10 @@ template = "en"
 
 [read]
 jobs = 8
+# Seconds of uncached OCR and speech per run. The rest stays listed as needs, and a rerun
+# picks it up from where the cache left off
+budget = 600
+# Scene frames to OCR per video. Transcripts always run
+frames = 20
+# Largest URL download in bytes
+max_bytes = 20000000

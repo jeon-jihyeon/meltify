@@ -1,9 +1,26 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from meltify.cli import main
+from meltify.engines import asr
+from meltify.engines import ocr as engines
+from meltify.safe import MissingTool
 from tests.fixtures.make_docs import mixed_folder, nested_mail, tricky_mail
 from tests.fixtures.make_pdf import hidden_pdf
+
+
+@pytest.fixture(autouse=True)
+def no_engines(tmp_path, monkeypatch):
+    # Real engines are slow and machine-specific, so these tests see none unless they add fakes
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(engines, "select", lambda spec, s: [])
+
+    def no_asr(spec, s):
+        raise MissingTool("speech engine", "install one")
+
+    monkeypatch.setattr(asr, "select", no_asr)
 
 
 def _rows(tmp_path, monkeypatch, capsys, *paths):
@@ -12,9 +29,12 @@ def _rows(tmp_path, monkeypatch, capsys, *paths):
     return code, json.loads(capsys.readouterr().out)
 
 
-def test_mixed_folder_melts_with_citations(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("shallow", [True, False])
+def test_mixed_folder_melts_with_citations(tmp_path, monkeypatch, capsys, shallow):
+    # --shallow is the 0.1 behavior, and without engines the deep read lists the same needs
     folder = mixed_folder(tmp_path / "in")
-    code, out = _rows(tmp_path, monkeypatch, capsys, folder)
+    flags = ["--shallow"] if shallow else []
+    code, out = _rows(tmp_path, monkeypatch, capsys, folder, *flags)
     assert code == 0
     by_cite = {r["cite"]: r for r in out["results"]}
 
@@ -102,7 +122,8 @@ def test_forwarded_mail_is_followed_and_depth_limit_is_reported(tmp_path, monkey
     kinds = sorted(r["kind"] for r in out["results"])
     assert kinds == ["mail", "mail", "text"]
 
-    deep = nested_mail(tmp_path / "deep.eml", levels=3)
+    deep = nested_mail(tmp_path / "deep.eml", levels=4)
     _, out = _rows(tmp_path, monkeypatch, capsys, deep)
-    assert len(out["results"]) == 3
-    assert any("depth" in n for r in out["results"] for n in r["needs"])
+    assert len(out["results"]) == 4
+    assert [r["needs"] for r in out["results"] if r["needs"]] == [["1 nested items beyond depth 3"]]
+    assert max(r["cite"].count("#att=") for r in out["results"]) == 3
