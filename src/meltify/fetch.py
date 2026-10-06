@@ -62,6 +62,10 @@ MAGIC = (
 )
 ZIP_SUFFIXES = {".docx", ".xlsx", ".xlsm", ".pptx", ".epub", ".hwpx", ".odt", ".ods", ".odp"}
 ZIP_SUFFIXES |= {".zip", ".jar", ".pages", ".numbers", ".key", ".ipynb"}
+# Macro, template and slideshow variants, which a plain .zip name would unpack as an archive
+ZIP_SUFFIXES |= {".docm", ".dotx", ".dotm", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm"}
+ZIP_SUFFIXES |= {".xltx", ".xltm", ".xlsb", ".show", ".cell", ".cbz", ".xps", ".oxps"}
+ZIP_SUFFIXES |= {".odg", ".ott", ".ots", ".otp", ".otg"}
 
 
 @dataclass

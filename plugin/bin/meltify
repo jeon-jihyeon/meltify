@@ -9,7 +9,7 @@
 # scripts/sync_version.py writes VERSION and copies this file into the plugin and every skill
 set -eu
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 REPO="jeon-jihyeon/meltify"
 DATA="${CLAUDE_PLUGIN_DATA:-${XDG_DATA_HOME:-${HOME}/.local/share}/meltify}"
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)

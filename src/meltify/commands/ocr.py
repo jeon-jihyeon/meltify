@@ -91,7 +91,7 @@ def _overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def _read_tiles(e: Any, prepared: Any, tile_max: int, folder: Path) -> list[Any]:
+def read_tiles(e: Any, prepared: Any, tile_max: int, folder: Path) -> list[Any]:
     from meltify import imaging
     from meltify.engines import ocr as engines
 
@@ -166,7 +166,7 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
             readings: list[EngineReading] = []
             for e in [*selected, *readings_in]:
                 if isinstance(e, engines.Remote):
-                    got = attempt(_read_tiles, e, prepared, tile_max, out_dir / stem)
+                    got = attempt(read_tiles, e, prepared, tile_max, out_dir / stem)
                 else:
                     got = attempt(e.recognize, prep_path, size)
                 if not got.ok:

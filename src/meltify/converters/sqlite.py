@@ -5,19 +5,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from meltify.converters import Block, Converted
+from meltify.converters.tables import sample_cell
 from meltify.evidence import Src
 
 SAMPLE_ROWS = 20
-MAX_CELL = 200
-
-
-def _cell(value: object) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bytes):
-        return f"<blob {len(value):,} bytes>"
-    text = str(value).replace("\n", " ").replace("|", "\\|")
-    return text if len(text) <= MAX_CELL else text[:MAX_CELL] + "..."
 
 
 def _quote(name: str) -> str:
@@ -41,7 +32,7 @@ def _table(db: sqlite3.Connection, name: str, src: Src) -> Block:
     for n, row in enumerate(rows, start=1):
         label = f"rowid={row[0]}" if keyed else f"row {n}"
         values = row[1:] if keyed else row
-        lines.append(f"{label}| " + " | ".join(_cell(v) for v in values))
+        lines.append(f"{label}| " + " | ".join(sample_cell(v) for v in values))
     first = f"rowid={rows[0][0]}" if keyed and rows else None
     return Block(replace(src, sheet=name, cell=first), "\n".join(lines))
 

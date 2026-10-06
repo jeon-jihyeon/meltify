@@ -11,6 +11,7 @@ from typing import Any
 
 from meltify import __version__
 from meltify.evidence import MISSING, Envelope
+from meltify.needs import error_note
 
 NAME = "doctor"
 HELP = "check engines, binaries and API keys that the other commands need"
@@ -31,10 +32,20 @@ MODULES = [
     ("hwpx", "read hwp hwpx", "pip install meltify", True),
     ("striprtf", "read rtf", "pip install meltify", True),
     ("pi_heif", "read ocr heic avif", "pip install meltify", True),
-    ("markitdown", "read docx pptx msg", "meltify doctor --install office", False),
-    ("python_calamine", "read xls", "meltify doctor --install office", False),
+    ("markitdown", "read docx pptx msg epub", "meltify doctor --install office", False),
+    ("olefile", "read msg ppt", "meltify doctor --install office", False),
+    (
+        "metafile_render",
+        "read emf wmf without LibreOffice",
+        "meltify doctor --install office",
+        False,
+    ),
+    ("python_calamine", "read xls xlsb, faster xlsx", "meltify doctor --install office", False),
     ("legacy_doc", "read doc", "meltify doctor --install office", False),
     ("libarchive", "read 7z rar", "meltify doctor --install archive", False),
+    ("msoffcrypto", "read encrypted office", "meltify doctor --install crypto", False),
+    ("pyzipper", "read aes zip", "meltify doctor --install crypto", False),
+    ("cryptography", "read encrypted hwp iwork", "meltify doctor --install crypto", False),
     ("numbers_parser", "read numbers", "meltify doctor --install iwork", False),
     ("playwright", "read --render", "meltify doctor --install render", False),
     ("yt_dlp", "media urls", "meltify doctor --install media", False),
@@ -47,18 +58,35 @@ if IS_APPLE_SILICON:
 
 BINARIES = [
     ("ffmpeg", "media read audio", "brew install ffmpeg or apt install ffmpeg"),
-    ("ffprobe", "media", "installed with ffmpeg"),
+    ("ffprobe", "media read fallback", "installed with ffmpeg"),
     ("deno", "media youtube", "brew install deno"),
     ("whisper-cli", "asr engine whispercpp", "brew install whisper-cpp"),
+    ("wpd2text", "read wpd", "brew install libwpd or apt install libwpd-tools"),
     ("uv", "launcher and --install", "https://docs.astral.sh/uv/"),
 ]
-SOFFICE_HINT = "brew install --cask libreoffice or apt install libreoffice"
+SOFFICE_HINT = (
+    "meltify doctor --install libreoffice, brew install --cask libreoffice "
+    "or apt install libreoffice"
+)
+SEVEN_ZIP_HINT = "meltify doctor --install archive"
 # Where Playwright's `channel="chrome"` looks first, so --render can skip its own Chromium
 CHROME = (
     Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     Path("/opt/google/chrome/chrome"),
 )
-EXTRAS = ["office", "archive", "iwork", "render", "media", "asr-mlx", "ocr-paddle", "all"]
+EXTRAS = [
+    "office",
+    "archive",
+    "iwork",
+    "crypto",
+    "render",
+    "media",
+    "asr-mlx",
+    "ocr-paddle",
+    "all",
+    # Not a Python extra: a portable LibreOffice downloaded into the tools dir
+    "libreoffice",
+]
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
@@ -66,7 +94,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--install",
         choices=EXTRAS,
-        help="install an optional extra into the launcher's venv in the data dir",
+        help="install an optional extra into the launcher's venv in the data dir, or "
+        "download a portable LibreOffice with `libreoffice`",
     )
     p.add_argument("--probe", action="store_true", help="make one tiny paid call per API key")
 
@@ -117,6 +146,11 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
             rows.append(
                 _row(f"bin {binary}", path is not None, path or "not on PATH", used_by, hint)
             )
+        from meltify.converters import run
+
+        # So the quicklook row reports what read would do with these settings
+        looks = bool(settings.get("render", {}).get("quicklook", True))
+        run.use(run.RunContext(quicklook=looks))
         rows += system_parts()
         out = Path(settings.get("out_dir", "."))
         probe = out if out.exists() else Path.cwd()
@@ -134,24 +168,52 @@ def chrome() -> str | None:
     return found or next((str(p) for p in CHROME if p.exists()), None)
 
 
+def _where(binary: str) -> str:
+    from meltify import tools
+
+    return f"{binary} (downloaded)" if Path(binary).is_relative_to(tools.tools_dir()) else binary
+
+
 def system_parts() -> list[dict[str, Any]]:
     """Programs and shared libraries outside the venv that some formats lean on"""
-    from meltify.converters.archive import _libarchive_ready
-    from meltify.converters.legacy import soffice
+    from meltify import tools
+    from meltify.converters import quicklook, render
+    from meltify.converters.archive import libarchive_ready
 
-    binary = soffice()
+    binary = render.soffice()
     rows = [
         _row(
             "bin soffice",
             binary is not None,
-            binary or "not found",
-            "read ppt, doc fallback",
+            "not found" if binary is None else _where(binary),
+            "read PowerPoint 95, formula recalc, emf pictures, uncached charts, other binaries",
             SOFFICE_HINT,
         )
     ]
+    if IS_MAC:
+        ready = quicklook.available()
+        rows.append(
+            _row(
+                "render quicklook",
+                ready,
+                "qlmanage" if ready else "turned off or qlmanage missing",
+                "read renders when soffice is missing or fails",
+                "set render.quicklook = true",
+            )
+        )
+    seven = tools.seven_zip()
+    rows.append(
+        _row(
+            "bin 7zz",
+            seven is not None,
+            "not found" if seven is None else _where(seven),
+            "read 7z rar and other archives",
+            SEVEN_ZIP_HINT,
+        )
+    )
     # libarchive-c is only a binding, so the shared library has to be there as well
     if importlib.util.find_spec("libarchive") is not None:
-        ready = _libarchive_ready()
+        ready = libarchive_ready()
         rows.append(
             _row(
                 "lib libarchive",
@@ -221,9 +283,34 @@ def source_checkout() -> Path | None:
     return None
 
 
+def _size(n: int) -> str:
+    return f"{n / 2**20:.0f} MB"
+
+
+def install_tool(name: str, env: dict[str, str]) -> dict[str, Any]:
+    """Download one pinned helper binary into the tools dir"""
+    from meltify import tools
+
+    root = data_dir(env) / "tools"
+    if name == "libreoffice":
+        item = tools.pinned(tools.LIBREOFFICE, "LibreOffice")
+        what, used_by = f"LibreOffice {tools.LIBREOFFICE_VERSION}", "read renders"
+        install = tools.install_libreoffice
+    else:
+        item = tools.pinned(tools.SEVEN_ZIP, "7-Zip")
+        what, used_by = f"7-Zip {tools.SEVEN_ZIP_VERSION}", "read archives"
+        install = tools.install_seven_zip
+    # The download can take minutes, so say what's coming before it starts
+    print(f"downloading {what} ({_size(item.size)}) into {root}", file=sys.stderr)
+    binary = install(root)
+    return _row(f"install {name}", True, f"{what}, {_size(item.size)}, at {binary}", used_by, "")
+
+
 def install(extra: str, env: dict[str, str]) -> list[dict[str, Any]]:
     from meltify import safe
 
+    if extra == "libreoffice":
+        return [install_tool("libreoffice", env)]
     uv = safe.require_binary("uv", "install uv from https://docs.astral.sh/uv/")
     venv = data_dir(env) / "venv"
     if not (venv / "bin" / "python").exists():
@@ -246,6 +333,21 @@ def install(extra: str, env: dict[str, str]) -> list[dict[str, Any]]:
         rows.append(
             _row("browser chrome", True, found or "Playwright Chromium", "read --render", "")
         )
+    if extra in ("archive", "all"):
+        try:
+            rows.append(install_tool("7zip", env))
+        except (OSError, RuntimeError) as e:
+            # 7-Zip only adds encrypted archives, so a platform without a pinned build or a
+            # failed download must not undo the Python install above
+            rows.append(
+                _row(
+                    "install 7zip",
+                    False,
+                    error_note(e),
+                    "read archives",
+                    f"put 7zz or 7z on PATH, or rerun {SEVEN_ZIP_HINT} once online",
+                )
+            )
     (venv / ".meltify-version").write_text(__version__, encoding="utf-8")
     return rows
 
@@ -298,7 +400,7 @@ def probe(settings: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]
             ok = r.status_code < 400
             detail = f"http {r.status_code} in {time.monotonic() - start:.1f}s"
         except Exception as e:  # noqa: BLE001
-            ok, detail = False, f"{type(e).__name__}: {e}"[:120]
+            ok, detail = False, error_note(e, 120)
         rows.append(
             _row(f"probe {name}", ok, detail, "llm engines", "check the key and model name")
         )
@@ -310,9 +412,15 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
     environ = dict(os.environ)
     if args.install:
         env.results = install(args.install, environ)
-        env.summary = (
-            f"installed {args.install}. The launcher now uses {data_dir(environ) / 'venv'}"
-        )
+        env.warnings += [
+            f"{r['check']}: {r['detail']} ({r['hint']})" for r in env.results if not r["ok"]
+        ]
+        if args.install == "libreoffice":
+            env.summary = "installed libreoffice. read now renders with it"
+        else:
+            env.summary = (
+                f"installed {args.install}. The launcher now uses {data_dir(environ) / 'venv'}"
+            )
         return env
     env.results = checks(settings, args.quick, environ)
     if not args.quick:
