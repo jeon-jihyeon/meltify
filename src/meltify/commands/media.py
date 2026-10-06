@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from meltify import __version__
+from meltify.converters.subtitle import parse_subtitles
 from meltify.evidence import Envelope, Src, finding
 from meltify.files import flat_name
 from meltify.safe import MissingTool
@@ -17,8 +18,6 @@ from meltify.safe import MissingTool
 NAME = "media"
 HELP = "turn a video, recording or video URL into timestamped frames and a timestamped transcript"
 COLUMNS = ["type", "text", "path", "cite"]
-
-CUE = re.compile(r"(\d+:)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d+:)?(\d{2}):(\d{2})[.,](\d{3})")
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
@@ -33,37 +32,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--keep-duplicates", action="store_true", help="list near-identical frames too")
 
 
-def _seconds(h: str | None, m: str, s: str, ms: str) -> float:
-    return int((h or "0:")[:-1]) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-
-
-def parse_subtitles(text: str) -> list[tuple[float, float, str]]:
-    """VTT or SRT cues with tags stripped and rolling repeats merged"""
-    cues: list[tuple[float, float, str]] = []
-    lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        m = CUE.search(lines[i])
-        if not m:
-            i += 1
-            continue
-        start = _seconds(m.group(1), m.group(2), m.group(3), m.group(4))
-        end = _seconds(m.group(5), m.group(6), m.group(7), m.group(8))
-        body = []
-        i += 1
-        while i < len(lines) and lines[i].strip():
-            body.append(re.sub(r"<[^>]+>", "", lines[i]).strip())
-            i += 1
-        said = " ".join(b for b in body if b)
-        # Auto captions repeat the previous line as they roll, so keep only the new text
-        if cues and said.startswith(cues[-1][2]) and said != cues[-1][2]:
-            said = said[len(cues[-1][2]) :].strip()
-        if said and (not cues or said != cues[-1][2]):
-            cues.append((round(start, 2), round(end, 2), said))
-    return cues
-
-
-def _download(
+def download(
     url: str, out_dir: Path, sub_langs: list[str], subs_only: bool, max_height: int
 ) -> tuple[Path | None, list[Path]]:
     if importlib.util.find_spec("yt_dlp") is None:
@@ -99,7 +68,7 @@ def _sidecars(path: Path) -> list[Path]:
     )
 
 
-def _work_name(url: str) -> str:
+def work_name(url: str) -> str:
     # The tail keeps the name readable, and the hash keeps URLs with the same tail apart
     tail = re.sub(r"[^\w.\-]+", "_", url)[-71:]
     return f"{tail}_{hashlib.sha256(url.encode()).hexdigest()[:8]}"
@@ -111,14 +80,14 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
 
     env = Envelope(command=NAME, version=__version__)
     conf = settings.get("media", {})
-    lang = settings.get("lang", "ko")
+    lang = str(settings.get("asr", {}).get("lang", "auto"))
     window = ffmpeg.Window(args.start, args.end)
     is_url = args.source.startswith(("http://", "https://"))
     base = Path(settings["out_dir"]) / "media"
 
     if is_url:
-        work = base / _work_name(args.source)
-        video, subs = _download(
+        work = base / work_name(args.source)
+        video, subs = download(
             args.source,
             work,
             list(conf.get("sub_langs", ["ko", "en"])),

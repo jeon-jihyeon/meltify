@@ -4,7 +4,7 @@ description: Turn a video, screen recording, phone call recording or video URL i
 license: MIT
 compatibility: Needs uv or meltify on PATH and ffmpeg. URLs need the media extra and deno for YouTube. Speech recognition needs the asr-mlx extra on Apple Silicon, whisper-cpp or an API key.
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   cli: meltify media
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -33,6 +33,7 @@ When recordings sit in a folder with other files, the meltify-read skill already
 
 - Consecutive frames with a near-identical layout and brightness are skipped. A small change, like one digit of a counter, can get skipped along with them. Add `--keep-duplicates` when you're counting or comparing small details.
 - At the default 1 fps, frames miss anything shorter than a second. For fast events, narrow the window and raise `--fps`.
+- The speech engine detects the spoken language per file, since `asr.lang` is `auto` by default. If a transcript comes out in the wrong language, set `asr.lang` in `meltify.toml`, or `MELTIFY_ASR_LANG`, to the language spoken.
 
 ## Then
 

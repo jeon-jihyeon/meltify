@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from meltify.converters import Block, Converted, RecognizeJob
+from meltify.converters import Block, Child, Converted, RecognizeJob
+from meltify.converters.limits import MAX_MEMBER_BYTES, human_bytes
 from meltify.evidence import Src
+from meltify.needs import error_note
+
+if TYPE_CHECKING:
+    from meltify.forensics.pdf import Marks
 
 # A page with less text than this is probably a scan
 SCAN_CHARS = 20
@@ -14,10 +20,15 @@ SCAN_CHARS = 20
 MIN_AREA_PT = 2500
 # In a 3+ page document, an image on more than half the pages is a logo or a letterhead
 REPEAT_SHARE = 0.5
-# An image this much of a page with real text under it is a searchable scan, already read
+# An image this much of a page is a scan, read already when a text layer lies over it
 COVER_SHARE = 0.8
 # Pillow reads these straight from the PDF stream. Anything else goes through a pixmap
 DIRECT = {"png", "jpeg", "jpg"}
+# Other paged formats MuPDF opens, named by the filetype it expects. EPUB has its own
+# converter, which keeps its chapters and links
+MUPDF = {".xps", ".oxps", ".fb2", ".cbz", ".mobi"}
+# FreeText shows its text on the page and a popup repeats its parent's
+SHOWN = {"FreeText", "Popup"}
 
 
 def _image_bytes(doc: Any, xref: int) -> bytes:
@@ -40,15 +51,90 @@ def _inline_bytes(page: Any, rect: Any) -> bytes:
     return page.get_pixmap(clip=rect, dpi=200).tobytes("png")
 
 
+def _layer_chars(marks: Marks, area: Any) -> int:
+    """Chars of unseen text over `area`, the way OCR tools make a scan searchable
+
+    They write the text invisible or paint the scan over it, while a visible header on
+    top of a scan is no reading of the pixels below. Counting stops at SCAN_CHARS, all the
+    caller asks about
+    """
+    import pymupdf
+
+    n = 0
+    for s in marks.trace:
+        unseen = s["type"] == 3 or s["opacity"] == 0
+        rect = pymupdf.Rect(s["bbox"])
+        if not rect.intersects(area):
+            continue
+        if unseen or marks.images.covered(s["seqno"], rect):
+            n += len(s["chars"])
+            if n >= SCAN_CHARS:
+                break
+    return n
+
+
+def _notes(page: Any, src: Src) -> list[Block]:
+    """Comments on annotations, which page text leaves out"""
+    out = []
+    for annot in page.annots():
+        kind = annot.type[1]
+        info = annot.info
+        text = (info.get("content") or "").strip()
+        if kind in SHOWN or not text:
+            continue
+        by = f" by {info['title']}" if info.get("title") else ""
+        r = annot.rect
+        at = replace(src, bbox=tuple(round(v, 1) for v in (r.x0, r.y0, r.x1, r.y1)), unit="pt")
+        out.append(Block(at, f"[{kind}{by}] {text}"))
+    return out
+
+
+def _attachments(doc: Any, src: Src, out: Converted) -> None:
+    """Files embedded in the document or pinned to a page, melted as nested items
+
+    One broken or oversized attachment is listed as a need and the rest still melt
+    """
+    import pymupdf
+
+    too_big = f"over {human_bytes(MAX_MEMBER_BYTES)}"
+
+    def take(name: str, info: Callable[[], dict], read: Callable[[], bytes]) -> None:
+        try:
+            found = info()
+            name = found.get("filename") or name
+            # Size is the unpacked length and may be missing, so the packed length bounds it too
+            if max(found.get("size", -1), found.get("length", -1)) > MAX_MEMBER_BYTES:
+                out.needs.append(f"attachment {name} not read ({too_big})")
+                return
+            data = read()
+        except Exception as e:  # noqa: BLE001
+            out.needs.append(f"attachment {name} not read ({error_note(e)})")
+            return
+        if len(data) > MAX_MEMBER_BYTES:
+            # Declared sizes can lie, so the bytes actually read are checked too
+            out.needs.append(f"attachment {name} not read ({too_big})")
+            return
+        out.children.append(Child(name, src, data=data))
+
+    for name in doc.embfile_names():
+        take(name, lambda n=name: doc.embfile_info(n), lambda n=name: doc.embfile_get(n))
+    for page in doc:
+        for annot in page.annots(types=[pymupdf.PDF_ANNOT_FILE_ATTACHMENT]):
+            name = f"p{page.number + 1}-attachment"
+            take(name, lambda a=annot: a.file_info, lambda a=annot: a.get_file())
+
+
 def convert(path: Path, src: Src) -> Converted:
     import pymupdf
 
     from meltify import imaging
-    from meltify.forensics.pdf import scan
+    from meltify.forensics.pdf import DEFAULT_LIMITS, Marks, scan_page
 
+    suffix = path.suffix.lower()
     out = Converted("pdf")
-    with pymupdf.open(path) as doc:
-        drawn = [page.get_image_info(xrefs=True) for page in doc]
+    with pymupdf.open(path, filetype=suffix[1:] if suffix in MUPDF else None) as doc:
+        # Only PDF images have an xref, so the others render like inline images
+        drawn = [[{"xref": 0, **i} for i in page.get_image_info(xrefs=True)] for page in doc]
         pages_with: Counter[int] = Counter()
         for infos in drawn:
             pages_with.update({i["xref"] for i in infos if i["xref"]})
@@ -58,9 +144,15 @@ def convert(path: Path, src: Src) -> Converted:
             if doc.page_count >= 3 and n / doc.page_count > REPEAT_SHARE
         }
         for i, page in enumerate(doc, start=1):
+            # The hidden text check and the scan layer check read the same draw log
+            marks = Marks(page)
+            if suffix not in MUPDF:
+                out.hidden += sum(1 for _ in scan_page(page, i, DEFAULT_LIMITS, marks))
             text = page.get_text("text").strip()
             if text:
                 out.blocks.append(Block(replace(src, page=i), text))
+            if doc.is_pdf:
+                out.blocks += _notes(page, replace(src, page=i))
             if len(text) < SCAN_CHARS:
                 # A full-page image with no text is a scan. OCR the rendered page instead of
                 # its images, so text drawn on top of them is read too
@@ -75,7 +167,11 @@ def convert(path: Path, src: Src) -> Converted:
                     or shown.width * shown.height < MIN_AREA_PT
                     or min(info["width"], info["height"]) < imaging.MIN_SIDE
                     or xref in repeated
-                    or shown.width * shown.height >= COVER_SHARE * page.rect.get_area()
+                ):
+                    continue
+                if (
+                    shown.width * shown.height >= COVER_SHARE * page.rect.get_area()
+                    and _layer_chars(marks, shown) >= SCAN_CHARS
                 ):
                     continue
                 # Pixel boxes map onto the whole drawn rect, even the part off the page
@@ -89,7 +185,8 @@ def convert(path: Path, src: Src) -> Converted:
                         rect=(rect.x0, rect.y0, rect.x1, rect.y1),
                     )
                 )
-    out.hidden = len(scan(str(path)))
+        if doc.is_pdf:
+            _attachments(doc, src, out)
     if out.hidden:
         out.needs.append(f"hidden {out.hidden} spans")
     return out

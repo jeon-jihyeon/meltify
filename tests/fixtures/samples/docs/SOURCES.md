@@ -15,3 +15,4 @@ Small public test files from other open source projects, kept byte for byte so c
 | `numbers-parser-issue-18.numbers` | [masaccio/numbers-parser `tests/data/issue-18.numbers`](https://github.com/masaccio/numbers-parser/blob/main/tests/data/issue-18.numbers) | MIT |
 | `numbers-parser-encrypted.numbers` | [masaccio/numbers-parser `tests/data/encrypted.numbers`](https://github.com/masaccio/numbers-parser/blob/main/tests/data/encrypted.numbers) | MIT |
 | `keynote-parser-table.key` | [psobot/keynote-parser `tests/data/table.key`](https://github.com/psobot/keynote-parser/blob/master/tests/data/table.key) | MIT |
+| `docling-keynote-2018.key` | [docling-project/docling `tests/data/keynote/sources/keynote_2018.key`](https://github.com/docling-project/docling/blob/d15cf10c26cf33c54ef2779a1fd9d4e3066d07e0/tests/data/keynote/sources/keynote_2018.key) | MIT |

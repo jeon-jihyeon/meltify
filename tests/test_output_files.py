@@ -67,6 +67,16 @@ def test_iter_files_skips_hidden_and_filters(tmp_path):
     assert [p.name for p in got] == ["x.PDF"]
 
 
+def test_iter_files_yields_iwork_bundles_whole(tmp_path):
+    bundle = tmp_path / "in/old.pages"
+    (bundle / "Data").mkdir(parents=True)
+    (bundle / "index.xml.gz").write_text("1")
+    (bundle / "Data/pic.jpg").write_text("1")
+    (tmp_path / "in/notes.txt").write_text("1")
+    assert list(files.iter_files([tmp_path / "in"])) == [tmp_path / "in/notes.txt", bundle]
+    assert list(files.iter_files([bundle])) == [bundle]
+
+
 def test_flat_name_and_root(tmp_path):
     f = tmp_path / "in/mail box/a b.eml"
     f.parent.mkdir(parents=True)

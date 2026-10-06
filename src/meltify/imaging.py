@@ -23,6 +23,15 @@ SHORT_TARGET = 1000
 # Past this, upscaling only slows the engines down, and huge scans get scaled down to it
 LONG_MAX = 4000
 UPSCALE_MAX = 4.0
+# Frames read from one image file, enough for a long fax TIFF or a slideshow GIF
+MAX_FRAMES = 50
+# Formats whose extra frames are pages or animation steps. MPO, ICO and PSD extras repeat
+# the same picture at another size or as a layer of the composite
+PAGED = {"TIFF", "GIF", "PNG", "WEBP"}
+# An animation frame differing from the last kept one in at most this many pixels, by more
+# than PIXEL_GAP gray levels, repeats it. One changed digit spans far more pixels
+SAME_PIXELS = 16
+PIXEL_GAP = 32
 
 
 def auto_factor(width: int, height: int) -> float:
@@ -133,6 +142,43 @@ class Look:
         return (
             hamming(self.shape, other.shape) <= distance and abs(self.tone - other.tone) < tone_gap
         )
+
+
+def frames(path: Path) -> tuple[list[int], int]:
+    """Frame numbers worth reading, from 1, and how many frames past MAX_FRAMES go unread
+
+    An animation frame that repeats the last kept one adds nothing, so it's skipped.
+    TIFF pages are separate pages of a document and always kept
+    """
+    import numpy as np
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(path) as im:
+            total = getattr(im, "n_frames", 1)
+            if total <= 1 or im.format not in PAGED:
+                return [1], 0
+            kept: list[int] = []
+            last = None
+            for n in range(total):
+                if len(kept) == MAX_FRAMES:
+                    return kept, total - n
+                im.seek(n)
+                if im.format != "TIFF":
+                    # Pixels, not a perceptual hash, since a frame may change only one number
+                    gray = np.asarray(im.convert("L"), dtype=np.int16)
+                    if (
+                        last is not None
+                        and last.shape == gray.shape
+                        and np.count_nonzero(np.abs(gray - last) > PIXEL_GAP) <= SAME_PIXELS
+                    ):
+                        continue
+                    last = gray
+                kept.append(n + 1)
+            return kept, 0
+    except (UnidentifiedImageError, OSError, ValueError, EOFError, Image.DecompressionBombError):
+        # Recognition opens it again and reports why it can't
+        return [1], 0
 
 
 def save(image: Any, path: Path) -> Path:

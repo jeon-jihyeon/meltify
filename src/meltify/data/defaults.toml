@@ -1,3 +1,4 @@
+# Language of the text OCR reads. Speech has its own asr.lang
 lang = "ko"
 out_dir = "meltify-out"
 
@@ -25,6 +26,9 @@ engine = "auto"
 model = "mlx-community/whisper-large-v3-turbo"
 whispercpp_model = ""
 api_model = "whisper-1"
+# Spoken language for every speech engine. auto lets Whisper detect it per file, since the
+# top-level lang is the OCR text language and forcing it makes other speech come out translated
+lang = "auto"
 
 [media]
 max_height = 1080
@@ -58,6 +62,7 @@ root = "problems"
 template = "en"
 
 [read]
+# Files converted at once. Above 1, PDFs convert in worker processes
 jobs = 8
 # Seconds of uncached OCR and speech per run. The rest stays listed as needs, and a rerun
 # picks it up from where the cache left off
@@ -66,3 +71,11 @@ budget = 600
 frames = 20
 # Largest URL download in bytes
 max_bytes = 20000000
+# Binary files no converter reads get one more try: LibreOffice for the formats it imports,
+# Pillow, ffprobe, then on macOS Quick Look and Spotlight. Off keeps them as an unsupported need
+fallback = true
+
+[render]
+# macOS only. Quick Look previews draw what LibreOffice can't or isn't installed for, like
+# Keynote decks and EMF pictures. Off keeps those files as needs, and skips Spotlight too
+quicklook = true

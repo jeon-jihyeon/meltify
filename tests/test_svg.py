@@ -69,3 +69,26 @@ def test_read_cites_svg_end_to_end(tmp_path, monkeypatch, capsys):
     assert row["needs"] == ["hidden 3 texts"]
     md = Path(row["out"]).read_text()
     assert "## a.svg#t1:5\n매출 120억" in md
+
+
+def test_svgz_is_unpacked_and_read_like_svg(tmp_path):
+    import gzip
+
+    from meltify.converters import pick
+
+    path = tmp_path / "pic.svgz"
+    path.write_bytes(
+        gzip.compress(b'<svg xmlns="http://www.w3.org/2000/svg"><text>GRAPE</text></svg>')
+    )
+    kind, melt = pick(path)
+    out = melt(path, Src("pic.svgz"))
+    assert kind == "svg"
+    assert [(b.src.cite(), b.text) for b in out.blocks] == [("pic.svgz:1", "1| GRAPE")]
+
+
+def test_corrupt_svgz_is_listed(tmp_path):
+    path = tmp_path / "pic.svgz"
+    path.write_bytes(b"\x1f\x8b\x08\x00 not deflate")
+    assert convert(path, Src("pic.svgz")).needs == [
+        "svgz not read (corrupt or over the unpack limit)"
+    ]

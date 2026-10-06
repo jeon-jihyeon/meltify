@@ -16,7 +16,7 @@ DAY_FILE = re.compile(r"^([^/]+)/(\d{4}-\d{2}-\d{2})\.json$")
 ROSTERS = ("users.json", "channels.json", "groups.json", "mpims.json", "dms.json")
 BLOCK_MESSAGES = 200
 # Day files are small, but a hostile zip could claim anything
-MAX_MEMBER = 50_000_000
+MAX_MEMBER_BYTES = 50_000_000
 
 
 def sniff(path: Path, head: bytes) -> bool:
@@ -36,7 +36,7 @@ def _load(z: zipfile.ZipFile, name: str) -> list | dict | None:
         info = z.getinfo(name)
     except KeyError:
         return None
-    if info.file_size > MAX_MEMBER:
+    if info.file_size > MAX_MEMBER_BYTES:
         return None
     try:
         return json.loads(z.read(info))

@@ -18,6 +18,7 @@ from typing import Any
 
 from meltify import __version__
 from meltify.evidence import USAGE, Envelope, Src, finding
+from meltify.needs import error_note
 from meltify.output import append_jsonl, read_jsonl
 
 NAME = "submit"
@@ -188,7 +189,7 @@ class Submitter:
                 try:
                     r = self._request(path)
                 except Exception as e:  # noqa: BLE001
-                    response = f"{type(e).__name__}: {e}"[:300]
+                    response = error_note(e, 300)
                     break
                 if r.status_code == 429:
                     status = "http 429"
@@ -216,7 +217,7 @@ class Submitter:
                     status = f"http {r.status_code}"
                 break
         except Exception as e:  # noqa: BLE001
-            status, response = "error", f"{type(e).__name__}: {e}"[:300]
+            status, response = "error", error_note(e, 300)
         finally:
             # Log even when interrupted. The endpoint already saw the request,
             # and a restart must keep the gap from it

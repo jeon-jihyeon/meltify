@@ -6,18 +6,35 @@ import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+# Folders macOS shows as one document. iWork saved them this way before 2013, and still
+# does when a document is too big for a single file
+BUNDLES = {".pages", ".key", ".numbers"}
+
+
+def is_bundle(path: Path) -> bool:
+    return path.suffix.lower() in BUNDLES and path.is_dir()
+
+
+def _walk(root: Path) -> Iterator[Path]:
+    for folder, dirs, names in os.walk(root):
+        here = Path(folder)
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for d in [d for d in dirs if is_bundle(here / d)]:
+            dirs.remove(d)
+            yield here / d
+        yield from (here / n for n in names if not n.startswith(".") and (here / n).is_file())
+
 
 def iter_files(paths: Iterable[Path], suffixes: set[str] | None = None) -> Iterator[Path]:
-    """Files under each path in sorted order, skipping hidden names"""
+    """Files under each path in sorted order, skipping hidden names
+
+    An iWork bundle folder comes out as one input, like the single file it stands for
+    """
     for p in paths:
-        if p.is_file():
+        if p.is_file() or is_bundle(p):
             candidates = [p]
         elif p.is_dir():
-            candidates = sorted(
-                f
-                for f in p.rglob("*")
-                if f.is_file() and not any(part.startswith(".") for part in f.relative_to(p).parts)
-            )
+            candidates = sorted(_walk(p))
         else:
             raise FileNotFoundError(p)
         for f in candidates:
@@ -64,12 +81,23 @@ def flat_name(path: Path, root: Path | None = None) -> str:
     return re.sub(r"[^\w.\-]+", "_", "__".join(rel.parts))
 
 
+def member_name(raw: str | None, index: int) -> str:
+    # Senders and archive authors pick these names, so `..`, roots and drive letters must
+    # never reach a path. Plain directories stay, since they tell archive members apart
+    segments = (raw or "").replace("\\", "/").split("/")
+    if segments and re.fullmatch(r"[A-Za-z]:", segments[0]):
+        segments = segments[1:]
+    kept = [s.strip() for s in segments if s.strip() and set(s.strip()) != {"."}]
+    return "/".join(kept) or f"attachment-{index}"
+
+
 def unique_name(name: str, taken: set[str], identity: str) -> str:
-    # Flattening maps a/b.txt and a__b.txt to the same name.
+    # Flattening maps a/b.txt and a__b.txt to the same name, and macOS and Windows see
+    # Readme.txt and README.txt as one file, so `taken` holds names with case folded.
     # A hash of the full identity keeps the renamed one stable across runs
-    if name in taken:
+    if name.casefold() in taken:
         name = f"{name}-{hashlib.sha256(identity.encode()).hexdigest()[:8]}"
-    taken.add(name)
+    taken.add(name.casefold())
     return name
 
 
@@ -82,7 +110,8 @@ def common_root(paths: Iterable[Path]) -> Path | None:
     resolved = [_absolute(p) for p in paths]
     if not resolved:
         return None
-    dirs = [p if p.is_dir() else p.parent for p in resolved]
+    # A bundle folder stands for one file, so its parent is the root that names it
+    dirs = [p if p.is_dir() and not is_bundle(p) else p.parent for p in resolved]
     root = dirs[0]
     for d in dirs[1:]:
         while not d.is_relative_to(root):
