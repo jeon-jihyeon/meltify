@@ -346,6 +346,7 @@ register("media", f"{_HERE}:audio", *AUDIO)
 register("media", f"{_HERE}:video", *VIDEO)
 register("office", f"{_HERE}.office:convert", *OFFICE)
 register("web", f"{_HERE}.web:convert", ".html", ".htm", ".xhtml")
+register("webarchive", f"{_HERE}.webarchive:convert", ".webarchive")
 register("epub", f"{_HERE}.epub:convert", ".epub")
 register(
     "archive",
@@ -372,6 +373,7 @@ register("wordperfect", f"{_HERE}.wordperfect:convert", ".wpd", ".wp", ".wp5", "
 register("notebook", f"{_HERE}.notebook:convert", ".ipynb")
 register("mbox", f"{_HERE}.mbox:convert", ".mbox")
 register("sqlite", f"{_HERE}.sqlite:convert", ".db", ".sqlite", ".sqlite3")
+register("parquet", f"{_HERE}.parquet:convert", ".parquet")
 # Registered after TEXT, so these take over .srt and .vtt from the plain text entry
 register("subtitle", f"{_HERE}.subtitle:convert", ".srt", ".vtt", ".ass")
 register("text", f"{_HERE}.text:convert_card", ".vcf", ".ics")
@@ -383,6 +385,7 @@ register_sniff("slack", f"{_HERE}.slack:convert", f"{_HERE}.slack:sniff", {".zip
 register_sniff("pdf", f"{_HERE}.pdf:convert", _magic(b"%PDF-"))
 register_sniff("sqlite", f"{_HERE}.sqlite:convert", _magic(b"SQLite format 3\x00"))
 register_sniff("rtf", f"{_HERE}.rtf:convert", _magic(b"{\\rtf"))
+register_sniff("parquet", f"{_HERE}.parquet:convert", _magic(b"PAR1"))
 register_sniff("wordperfect", f"{_HERE}.wordperfect:convert", _wordperfect)
 # Document zips before the archive sniff, so an unnamed one isn't unpacked as a plain zip
 for kind, target, families in (

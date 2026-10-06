@@ -76,7 +76,7 @@ def test_doctor_lists_the_new_formats(monkeypatch, capsys, tmp_path):
         assert checks[f"module {module}"]["ok"] is True
     for module in (
         *("libarchive", "legacy_doc", "python_calamine", "olefile"),
-        *("numbers_parser", "playwright"),
+        *("numbers_parser", "pyarrow", "playwright"),
     ):
         assert f"module {module}" in checks
     assert checks["bin soffice"]["used_by"].startswith("read PowerPoint 95, formula recalc")
