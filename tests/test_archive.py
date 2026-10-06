@@ -351,7 +351,16 @@ def _7zz() -> str:
     found = tools.seven_zip()
     if found is None:
         pytest.skip("7-Zip isn't installed")
+    # The p7zip fork stores a symlink as a plain file, so these fixtures need 7-Zip itself
+    if b"p7zip" in subprocess.run([found], capture_output=True).stdout:
+        pytest.skip("p7zip instead of 7-Zip")
     return found
+
+
+def test_a_wrong_password_from_7zip_without_one_set_is_only_locked(monkeypatch):
+    monkeypatch.delenv("MELTIFY_PASSWORD", raising=False)
+    output = b"ERROR: Data Error in encrypted file. Wrong password? : a.txt"
+    assert str(archive._failure("7-Zip", output)) == passwords.LOCKED
 
 
 def _seven(tmp_path: Path, name: str, *flags: str) -> Path:

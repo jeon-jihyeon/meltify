@@ -315,7 +315,8 @@ def _libarchive_members(path: Path) -> Iterator[Member]:
 def _failure(tool: str, output: bytes) -> Exception:
     text = output.decode("utf-8", "replace")
     if "Wrong password" in text:
-        return passwords.Locked(passwords.WRONG)
+        # p7zip takes a closed stdin as an empty password, so with none set it's only locked
+        return passwords.Locked(passwords.WRONG if passwords.password() else passwords.LOCKED)
     # 7-Zip asks for a password on stdin and gives up at end of input
     if "Enter password" in text or "Break signaled" in text:
         return passwords.Locked(passwords.LOCKED)
