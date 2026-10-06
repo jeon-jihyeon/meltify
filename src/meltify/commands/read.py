@@ -628,6 +628,7 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
             password=given_password(args, env.warnings.append, password),
             fallback=bool(conf.get("fallback", True)),
             shallow=args.shallow,
+            parquet_rows=int(conf.get("parquet_rows", 200)),
             quicklook=looks,
             temps=temps,
         )

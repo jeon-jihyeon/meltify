@@ -34,5 +34,5 @@ jobs:
       - run: uv run python scripts/sync_version.py --check
       - run: uv run pytest -m "not llm and not heavy"
       # Run again with the common extras so their converters are covered too
-      - run: uv sync --locked --extra office --extra archive --extra crypto
+      - run: uv sync --locked --extra office --extra archive --extra parquet --extra crypto
       - run: uv run pytest -m "not llm and not heavy"

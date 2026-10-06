@@ -13,7 +13,7 @@ Run the full suite before you send a change, not just the tests next to your edi
 CI runs the suite a second time with the common extras, so their converters get covered too. Do the same before you touch one:
 
 ```
-uv sync --extra office --extra archive --extra crypto
+uv sync --extra office --extra archive --extra parquet --extra crypto
 uv run pytest -m "not llm and not heavy"
 ```
 

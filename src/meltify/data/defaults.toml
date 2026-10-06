@@ -74,6 +74,8 @@ max_bytes = 20000000
 # Binary files no converter reads get one more try: LibreOffice for the formats it imports,
 # Pillow, ffprobe, then on macOS Quick Look and Spotlight. Off keeps them as an unsupported need
 fallback = true
+# Parquet rows melted per file, 0 for all. The rest stays counted as a need
+parquet_rows = 200
 
 [render]
 # macOS only. Quick Look previews draw what LibreOffice can't or isn't installed for, like

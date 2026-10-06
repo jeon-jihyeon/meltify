@@ -4,7 +4,7 @@ description: Turn a video, screen recording, phone call recording or video URL i
 license: MIT
 compatibility: Needs uv or meltify on PATH and ffmpeg. URLs need the media extra and deno for YouTube. Speech recognition needs the asr-mlx extra on Apple Silicon, whisper-cpp or an API key.
 metadata:
-  version: "0.2.1"
+  version: "0.2.2"
   cli: meltify media
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
