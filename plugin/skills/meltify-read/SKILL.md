@@ -4,7 +4,7 @@ description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look.
 metadata:
-  version: "0.2.2"
+  version: "0.2.3"
   cli: meltify read
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---

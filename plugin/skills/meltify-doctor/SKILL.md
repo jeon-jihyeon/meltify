@@ -4,7 +4,7 @@ description: Check which meltify engines, binaries and API keys are available on
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.2"
+  version: "0.2.3"
   cli: meltify doctor
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---

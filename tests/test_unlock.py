@@ -186,6 +186,40 @@ def test_plain_pdf_and_other_files_pass_through(tmp_path):
     assert unlock.unlock(pdf) == pdf and unlock.unlock(text) == text
 
 
+def test_a_scanned_encrypted_pdf_hits_the_ocr_cache_on_the_next_run(tmp_path, monkeypatch):
+    import pymupdf
+
+    import meltify
+    from meltify.engines.ocr import LOCAL, TextBox
+    from tests.fixtures.make_docs import card
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=card("SCANNED 777-31", (850, 1100)))
+    pdf = tmp_path / "scan.pdf"
+    doc.save(pdf, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw=SECRET, owner_pw="owner")
+    calls = []
+
+    class Reader:
+        name, kind = "fake", LOCAL
+
+        def missing(self):
+            return None
+
+        def recognize(self, image, size):
+            calls.append(size)
+            return [TextBox("SCANNED 777-31", (0, 0, 10, 10), 0.9)]
+
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Reader()])
+    for n in range(2):
+        env = meltify.read(pdf, out=tmp_path / f"out{n}", password=SECRET)
+        assert "SCANNED 777-31" in Path(env.results[0]["out"]).read_text()
+        assert _leftovers(tmp_path) == []
+    assert len(calls) == 1
+    cached = [p for p in (tmp_path / "cache").rglob("*") if p.is_file()]
+    assert cached and not any(SECRET in p.name or SECRET in p.read_text() for p in cached)
+
+
 def _raw_pdf(path: Path, body: bytes) -> Path:
     """A plain PDF whose one content stream holds `body` as is"""
     objects = [
