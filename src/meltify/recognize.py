@@ -1,20 +1,26 @@
 """OCR and speech for the pixels and sound `read` finds, with results cited in place
 
-One worker reads every job in turn, since Paddle and MLX hold large models in memory.
-Identical content is read once, and every engine result is cached by content hash under
-${XDG_CACHE_HOME:-~/.cache}/meltify, so a rerun only pays for what changed
+A few workers read jobs side by side, while Paddle and MLX, which hold one large model
+each, still read one job at a time. Identical content is read once, and every engine
+result is cached by content hash under ${XDG_CACHE_HOME:-~/.cache}/meltify, so a rerun
+only pays for what changed
 """
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import io
 import json
 import os
 import re
+import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Collection
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -23,7 +29,7 @@ from meltify.converters import Block, RecognizeJob
 from meltify.engines.asr import Segment
 from meltify.engines.consensus import EngineReading, compare
 from meltify.engines.ocr import TextBox
-from meltify.evidence import Src, _clock, _num, finding
+from meltify.evidence import Src, clock, coordinate, finding
 from meltify.safe import MissingTool, attempt
 
 # Body text comes from the first engine here that read anything, then the rest in order
@@ -31,6 +37,12 @@ BODY_ORDER = ("vision", "paddle")
 # Raised when no engine was found at all, which the run already warned about once
 NO_ENGINE = ("ocr engine", "speech engine")
 CACHE_VERSION = 1
+# Workers for uncached content. Image prep and Vision overlap well, and more of them would
+# only queue on the engines that take one job at a time
+WORKERS = 4
+# Engines safe to call from several threads at once. Vision builds its own request per call,
+# while Paddle and the speech models keep one stateful model per instance
+SHARED = {"vision"}
 
 Box = tuple[float, float, float, float]
 
@@ -45,6 +57,8 @@ class Options:
     engines: str = "auto"
     asr: str = "auto"
     lang: str = "ko"
+    # Speech has its own setting, since OCR's lang forced on Whisper translates other speech
+    asr_lang: str = "auto"
     budget: float = 600.0
     frames: int = 20
     refresh: bool = False
@@ -105,7 +119,8 @@ class Cache:
         target = self.path(*key)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(f".{os.getpid()}.tmp")
+            # Unique per thread, since two workers can store the same frame or picture
+            tmp = target.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps({"v": CACHE_VERSION, **value}, ensure_ascii=False), "utf-8")
             os.replace(tmp, target)
         except OSError:
@@ -121,11 +136,11 @@ def _where(src: Src) -> str:
     # The box part of a cite, so each line reads as a suffix of its block's cite
     if src.bbox is None:
         return ""
-    return f"@{src.unit}(" + ",".join(_num(v) for v in src.bbox) + ")"
+    return f"@{src.unit}(" + ",".join(coordinate(v) for v in src.bbox) + ")"
 
 
-def _span(start: float, end: float) -> str:
-    return f"@{_clock(start)}-{_clock(end)}"
+def span(start: float, end: float) -> str:
+    return f"@{clock(start)}-{clock(end)}"
 
 
 def _placer(src: Src, unit: str, k: Box) -> Callable[[Box | None], Src]:
@@ -160,11 +175,27 @@ class Recognizer:
         # Unique contents this run, and how many came straight from the cache
         self.seen = 0
         self.cached = 0
+        # One lock per engine that can't take two jobs at once
+        self._locks: dict[str, threading.Lock] = {}
+        # Warnings a worker raises wait here, so they come out in job order
+        self._held = threading.local()
 
     def warn(self, message: str) -> None:
+        held = getattr(self._held, "warnings", None)
+        if held is not None:
+            held.append(message)
+            return
         if message not in self.warned:
             self.warned.add(message)
             self._warn(message)
+
+    def _one_at_a_time(self, engine: Any) -> Any:
+        """The engine's lock, or a no-op for engines safe across threads"""
+        from meltify.engines.ocr import REMOTE
+
+        if engine.name in SHARED or getattr(engine, "kind", None) == REMOTE:
+            return contextlib.nullcontext()
+        return self._locks.setdefault(engine.name, threading.Lock())
 
     # Engines
 
@@ -211,9 +242,15 @@ class Recognizer:
         if job.data is not None:
             return hashlib.sha256(job.data).hexdigest()
         assert job.path is not None
-        sha = self.file_sha(job.path)
         if job.kind == "page":
-            return hashlib.sha256(f"{sha}#p{job.src.page}".encode()).hexdigest()
+            from meltify.converters import render
+
+            # A render embeds the time it was made, so its pages key on what it was drawn from
+            base = render.drawn_from(job.path) or self.file_sha(job.path)
+            return hashlib.sha256(f"{base}#p{job.src.page}".encode()).hexdigest()
+        sha = self.file_sha(job.path)
+        if job.src.frame is not None:
+            return hashlib.sha256(f"{sha}#frame{job.src.frame}".encode()).hexdigest()
         return sha
 
     # The run
@@ -246,12 +283,30 @@ class Recognizer:
             self.seen += len(groups)
             self.cached += len(groups) - len(pending)
             start = time.monotonic()
-            for group, members in pending:
-                if time.monotonic() - start >= self.opts.budget:
-                    for i in members:
-                        outcomes[i].left = "budget"
-                    continue
-                self._settle(group, members, jobs, outcomes, compute=True)
+            # Locks exist before any worker asks, so two never make their own
+            for e in self._ocr or []:
+                self._one_at_a_time(e)
+            if self._asr is not None:
+                self._one_at_a_time(self._asr)
+
+            def read(group: tuple[str, str, bool], members: list[int]) -> list[str]:
+                self._held.warnings = []
+                try:
+                    # Workers pick groups up in order, so the budget still goes to the first
+                    if time.monotonic() - start >= self.opts.budget:
+                        for i in members:
+                            outcomes[i].left = "budget"
+                    else:
+                        self._settle(group, members, jobs, outcomes, compute=True)
+                    return self._held.warnings
+                finally:
+                    self._held.warnings = None
+
+            with ThreadPoolExecutor(min(WORKERS, max(1, len(pending)))) as pool:
+                held = [pool.submit(contextvars.copy_context().run, read, *p) for p in pending]
+                for warnings in [f.result() for f in held]:
+                    for message in warnings:
+                        self.warn(message)
         return outcomes
 
     def _settle(
@@ -278,6 +333,12 @@ class Recognizer:
             for i in members:
                 outcomes[i].left = "engine"
             return True
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            # ffmpeg may refuse a file ffprobe opened, and that must not end the whole run
+            self.warn(f"can't read {where}: {e}"[:300])
+            for i in members:
+                outcomes[i].left = "failed"
+            return True
         if got is None:
             return False
         for i in members:
@@ -292,9 +353,15 @@ class Recognizer:
         from meltify import imaging
 
         if job.kind == "page":
-            return imaging.render_pdf_page(str(job.path), job.src.page or 1, self.opts.dpi)
+            from meltify.converters.run import LOCK
+
+            # PyMuPDF isn't thread-safe, and OCR workers render pages side by side
+            with LOCK:
+                return imaging.render_pdf_page(str(job.path), job.src.page or 1, self.opts.dpi)
         source = io.BytesIO(job.data) if job.data is not None else job.path
         with Image.open(source) as im:
+            if job.src.frame is not None:
+                im.seek(job.src.frame - 1)
             return imaging.flatten(im)
 
     def _prep(self, page: bool) -> str:
@@ -337,14 +404,17 @@ class Recognizer:
             size = (image.width, image.height)
             factor = 1.0 if kind == "page" else imaging.auto_factor(*size)
             prepared = imaging.upscale(image, factor, self.opts.sharpen)
-            prep_path = imaging.save(prepared, self.tmp / sha / "prepared.png")
+            # A folder per read, since a frame and a picture can share content and workers
+            work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
+            prep_path = imaging.save(prepared, work / "prepared.png")
             for e in missing:
                 if isinstance(e, engines.Remote):
-                    from meltify.commands.ocr import _read_tiles
+                    from meltify.commands.ocr import read_tiles
 
-                    got = attempt(_read_tiles, e, prepared, self.opts.tile_max, self.tmp / sha)
+                    got = attempt(read_tiles, e, prepared, self.opts.tile_max, work)
                 else:
-                    got = attempt(e.recognize, prep_path, prepared.size)
+                    with self._one_at_a_time(e):
+                        got = attempt(e.recognize, prep_path, prepared.size)
                 if not got.ok:
                     self.warn(f"{e.name} failed on {where}: {got.error}")
                     continue
@@ -380,7 +450,7 @@ class Recognizer:
         engine = self.asr_engine()
         if engine is None:
             raise MissingTool("speech engine", "meltify doctor --install asr-mlx")
-        key = ("asr", sha, engine.name, self.opts.lang, self._asr_prep(engine))
+        key = ("asr", sha, engine.name, self.opts.asr_lang, self._asr_prep(engine))
         if (hit := self.cache.get(*key)) is not None:
             return [Segment(s, e, t) for s, e, t in hit["segments"]]
         if not compute:
@@ -388,8 +458,10 @@ class Recognizer:
         assert path is not None
         segments: list[Segment] = []
         if _has_audio(path):
-            wav = ffmpeg.audio(path, self.tmp / sha / "audio.wav", ffmpeg.Window())
-            got = attempt(engine.transcribe, wav, self.opts.lang)
+            work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
+            wav = ffmpeg.audio(path, work / "audio.wav", ffmpeg.Window())
+            with self._one_at_a_time(engine):
+                got = attempt(engine.transcribe, wav, self.opts.asr_lang)
             if not got.ok:
                 self.warn(f"{engine.name} failed on {where}: {got.error}")
                 return []
@@ -425,7 +497,7 @@ class Recognizer:
             pic = None
             if look:
                 pic = self.picture(
-                    s, lambda f=file: _open_flat(f), f"{where}{_span(t, t)}", "image", True
+                    s, lambda f=file: _open_flat(f), f"{where}{span(t, t)}", "image", True
                 )
             frames.append(Frame(t, s, pic))
         return Footage(speech, scenes, frames)
@@ -436,7 +508,7 @@ class Recognizer:
 
         from meltify import ffmpeg, imaging
 
-        folder = self.tmp / "frames" / hashlib.sha256(str(path).encode()).hexdigest()[:12]
+        folder = Path(tempfile.mkdtemp(prefix="frames-", dir=self.tmp))
         found = ffmpeg.scene_frames(path, folder, self.opts.scene, ffmpeg.Window())
         kept: list[tuple[Path, float]] = []
         last = None
@@ -509,7 +581,7 @@ class Recognizer:
         return Outcome([Block(base, "\n".join(lines))], disputed)
 
     def _speech_outcome(self, src: Src, segments: list[Segment]) -> Outcome:
-        lines = [f"{_span(s.start, s.end)}| {s.text}" for s in segments if s.text]
+        lines = [f"{span(s.start, s.end)}| {s.text}" for s in segments if s.text]
         return Outcome([Block(src, "\n".join(lines))] if lines else [])
 
     def _footage_outcome(self, src: Src, got: Footage) -> Outcome:
@@ -517,7 +589,7 @@ class Recognizer:
         if got.speech is None:
             out.left = "engine"
         if got.scenes:
-            line = "scenes: " + ", ".join(_clock(t) for t in got.scenes)
+            line = "scenes: " + ", ".join(clock(t) for t in got.scenes)
             if out.blocks:
                 out.blocks[0].text += "\n" + line
             else:

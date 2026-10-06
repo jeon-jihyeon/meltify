@@ -6,7 +6,8 @@ import pytest
 
 from meltify import ffmpeg
 from meltify.cli import main
-from meltify.commands.media import _sidecars, _work_name, parse_subtitles
+from meltify.commands.media import _sidecars, work_name
+from meltify.converters.subtitle import parse_subtitles
 from meltify.engines import asr
 from meltify.engines.asr import Segment
 from tests.fixtures.make_media import VTT, scenes_video
@@ -22,6 +23,8 @@ class FakeAsr:
 
     def transcribe(self, audio, lang):
         assert Path(audio).is_file()
+        # Speech language is detected by default, whatever the OCR lang says
+        assert lang == "auto"
         return [Segment(0.2, 1.0, "hello there")]
 
 
@@ -113,7 +116,7 @@ def test_sidecars_match_only_this_video(tmp_path):
 
 def test_url_work_dirs_do_not_collide():
     tail = "x" * 100
-    assert _work_name(f"https://a.com/{tail}") != _work_name(f"https://b.com/{tail}")
+    assert work_name(f"https://a.com/{tail}") != work_name(f"https://b.com/{tail}")
 
 
 def test_missing_file_is_a_usage_error(tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ MISSING = "missing"
 USAGE = "usage"
 
 
-def _clock(seconds: float) -> str:
+def clock(seconds: float) -> str:
     # Round to whole tenths once, so 59.96 carries into the minute instead of showing 60.0
     tenths = round(seconds * 10)
     h, rem = divmod(tenths, 36000)
@@ -17,7 +17,7 @@ def _clock(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{d}"
 
 
-def _num(v: float) -> str:
+def coordinate(v: float) -> str:
     return f"{v:g}" if float(v).is_integer() else f"{v:.1f}"
 
 
@@ -28,7 +28,7 @@ class Src:
     The cite joins the set fields in this fixed order, each one optional:
 
         path ("#att=" member)* ["#" jpath] ["#" anchor] ["#s" section] ["#p" page]
-        ["#slide" slide] ["#" sheet ["!" cell] | "#cell=" cell] ["#para" para]
+        ["#slide" slide] ["#frame" frame] ["#" sheet ["!" cell] | "#cell=" cell] ["#para" para]
         ["#ts=" ts] ["#img" img] ["@" unit "(" x0,y0,x1,y1 ")"] ["@" start "-" end]
         [":" line]
 
@@ -49,6 +49,7 @@ class Src:
     anchor: str | None = None  # fragment id inside a web page
     section: int | None = None
     slide: int | None = None
+    frame: int | None = None  # page of a multi-page TIFF or frame of an animation, from 1
     para: int | None = None
     img: int | None = None  # embedded image index within its page, slide or document
     ts: str | None = None  # message timestamp id in a chat export
@@ -70,6 +71,8 @@ class Src:
             out += f"#p{self.page}"
         if self.slide is not None:
             out += f"#slide{self.slide}"
+        if self.frame is not None:
+            out += f"#frame{self.frame}"
         if self.sheet:
             out += f"#{self.sheet}" + (f"!{self.cell}" if self.cell else "")
         elif self.cell:
@@ -81,9 +84,9 @@ class Src:
         if self.img is not None:
             out += f"#img{self.img}"
         if self.bbox is not None:
-            out += f"@{self.unit or 'px'}(" + ",".join(_num(v) for v in self.bbox) + ")"
+            out += f"@{self.unit or 'px'}(" + ",".join(coordinate(v) for v in self.bbox) + ")"
         if self.t is not None:
-            out += f"@{_clock(self.t[0])}-{_clock(self.t[1])}"
+            out += f"@{clock(self.t[0])}-{clock(self.t[1])}"
         if self.line is not None:
             out += f":{self.line}"
         return out

@@ -1,8 +1,17 @@
 import json
 
-from meltify import safe
+import pytest
+
+from meltify import safe, tools
 from meltify.cli import main
 from meltify.commands import doctor
+
+FETCH = tools.fetch
+
+
+@pytest.fixture(autouse=True)
+def no_downloads(monkeypatch):
+    monkeypatch.setattr(tools, "fetch", lambda item, folder: pytest.fail(f"downloaded {item.url}"))
 
 
 def test_doctor_reports_engines_and_keys_without_values(monkeypatch, capsys, tmp_path):
@@ -65,15 +74,18 @@ def test_doctor_lists_the_new_formats(monkeypatch, capsys, tmp_path):
     checks = {r["check"]: r for r in json.loads(capsys.readouterr().out)["results"]}
     for module in ("trafilatura", "hwpx", "striprtf", "pi_heif"):
         assert checks[f"module {module}"]["ok"] is True
-    for module in ("libarchive", "legacy_doc", "python_calamine", "numbers_parser", "playwright"):
+    for module in (
+        *("libarchive", "legacy_doc", "python_calamine", "olefile"),
+        *("numbers_parser", "playwright"),
+    ):
         assert f"module {module}" in checks
-    assert checks["bin soffice"]["used_by"] == "read ppt, doc fallback"
+    assert checks["bin soffice"]["used_by"].startswith("read PowerPoint 95, formula recalc")
 
 
 def test_system_parts_flag_a_binding_without_its_library(monkeypatch):
     import importlib.util
 
-    from meltify.converters import archive, legacy
+    from meltify.converters import archive, render
 
     real = importlib.util.find_spec
     monkeypatch.setattr(
@@ -81,8 +93,8 @@ def test_system_parts_flag_a_binding_without_its_library(monkeypatch):
         "find_spec",
         lambda n, *a: object() if n in ("libarchive", "playwright") else real(n, *a),
     )
-    monkeypatch.setattr(archive, "_libarchive_ready", lambda: False)
-    monkeypatch.setattr(legacy, "soffice", lambda: None)
+    monkeypatch.setattr(archive, "libarchive_ready", lambda: False)
+    monkeypatch.setattr(render, "soffice", lambda: None)
     monkeypatch.setattr(doctor, "chrome", lambda: None)
     rows = {r["check"]: r for r in doctor.system_parts()}
     assert rows["bin soffice"]["ok"] is False
@@ -103,6 +115,7 @@ def _fake_install(monkeypatch, tmp_path, calls):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
     monkeypatch.setattr(safe, "run", fake_run)
     monkeypatch.setattr(safe, "require_binary", lambda name, hint: "uv")
+    monkeypatch.setattr(tools, "install_seven_zip", lambda root: root / "7zip/7zz")
 
 
 def test_install_render_downloads_chromium_only_without_chrome(monkeypatch, tmp_path):
@@ -125,3 +138,239 @@ def test_install_accepts_the_new_extras(monkeypatch, tmp_path):
     for extra in ("archive", "iwork"):
         assert main(["doctor", "--install", extra]) == 0
         assert calls[-1][-1].endswith(f"[{extra}]")
+
+
+def test_system_parts_report_renderers_and_7zip(monkeypatch, tmp_path):
+    from meltify.converters import quicklook, render
+
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    portable = tmp_path / "tools/libreoffice/program/soffice"
+    monkeypatch.setattr(render, "soffice", lambda: str(portable))
+    monkeypatch.setattr(tools, "seven_zip", lambda: None)
+    monkeypatch.setattr(quicklook, "available", lambda: True)
+    monkeypatch.setattr(doctor, "IS_MAC", True)
+    rows = {r["check"]: r for r in doctor.system_parts()}
+    assert rows["bin soffice"]["detail"] == f"{portable} (downloaded)"
+    assert rows["render quicklook"]["ok"] is True
+    assert rows["bin 7zz"]["ok"] is False
+    assert rows["bin 7zz"]["hint"] == "meltify doctor --install archive"
+
+    monkeypatch.setattr(doctor, "IS_MAC", False)
+    assert "render quicklook" not in {r["check"] for r in doctor.system_parts()}
+
+
+def test_install_libreoffice_downloads_without_touching_the_venv(monkeypatch, tmp_path, capsys):
+    calls: list[list[str]] = []
+    _fake_install(monkeypatch, tmp_path, calls)
+    got = []
+    monkeypatch.setattr(tools, "platform_key", lambda: ("darwin", "arm64"))
+    monkeypatch.setattr(
+        tools, "install_libreoffice", lambda root: got.append(root) or root / "soffice"
+    )
+    assert main(["doctor", "--install", "libreoffice", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert got == [tmp_path / "data/tools"] and calls == []
+    [row] = out["results"]
+    assert row["check"] == "install libreoffice" and "LibreOffice 26.8.1, 285 MB" in row["detail"]
+
+
+def test_install_archive_also_fetches_7zip(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    _fake_install(monkeypatch, tmp_path, calls)
+    got = []
+    monkeypatch.setattr(tools, "platform_key", lambda: ("linux", "x86_64"))
+    monkeypatch.setattr(tools, "install_seven_zip", lambda root: got.append(root) or root)
+    assert main(["doctor", "--install", "archive"]) == 0
+    assert calls[-1][-1].endswith("[archive]") and got == [tmp_path / "data/tools"]
+
+
+def test_install_archive_keeps_the_venv_when_7zip_cant_download(monkeypatch, tmp_path, capsys):
+    calls: list[list[str]] = []
+    real = tools.install_seven_zip
+    _fake_install(monkeypatch, tmp_path, calls)
+    monkeypatch.setattr(tools, "platform_key", lambda: ("win32", "x86_64"))
+    monkeypatch.setattr(tools, "install_seven_zip", real)
+    assert main(["doctor", "--install", "archive", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    rows = {r["check"]: r for r in out["results"]}
+    assert rows["install archive"]["ok"] is True
+    assert rows["install 7zip"]["ok"] is False
+    assert "no 7-Zip download for win32" in rows["install 7zip"]["detail"]
+    assert "put 7zz or 7z on PATH" in rows["install 7zip"]["hint"]
+    assert any(w.startswith("install 7zip:") for w in out["warnings"])
+    assert (tmp_path / "data/venv/.meltify-version").read_text() == doctor.__version__
+
+
+def test_unpinned_platforms_fail_with_a_hint(monkeypatch, tmp_path):
+    monkeypatch.setattr(tools, "platform_key", lambda: ("win32", "x86_64"))
+    with pytest.raises(RuntimeError, match="no LibreOffice download for win32"):
+        doctor.install_tool("libreoffice", {"CLAUDE_PLUGIN_DATA": str(tmp_path)})
+
+
+def _tar(path, files: dict[str, bytes], mode="w:xz"):
+    import io
+    import tarfile
+
+    with tarfile.open(path, mode) as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
+def _pin(path):
+    import hashlib
+
+    data = path.read_bytes()
+    return tools.Download(
+        f"https://example.test/{path.name}", hashlib.sha256(data).hexdigest(), len(data)
+    )
+
+
+def test_fetch_refuses_a_file_that_misses_its_pin(monkeypatch, tmp_path):
+    import httpx
+
+    body = b"release bytes"
+    src = tmp_path / "a.tar.xz"
+    src.write_bytes(body)
+    good = _pin(src)
+
+    def stream(method, url, **kw):
+        return httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, content=body))
+        ).stream(method, url)
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    got = FETCH(good, tmp_path / "dl")
+    assert got.read_bytes() == body
+    bad = tools.Download(good.url, "0" * 64, good.size)
+    with pytest.raises(RuntimeError, match="pinned hash"):
+        FETCH(bad, tmp_path / "dl2")
+    assert not (tmp_path / "dl2" / "a.tar.xz").exists()
+
+
+def test_fetch_stops_a_download_past_its_pinned_size(monkeypatch, tmp_path):
+    import httpx
+
+    sent = []
+
+    def endless():
+        # A hostile mirror that never ends, cut off well before it fills the disk
+        for _ in range(64):
+            sent.append(1)
+            yield b"x" * (1 << 20)
+
+    def stream(method, url, **kw):
+        return httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, content=endless()))
+        ).stream(method, url)
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    pin = tools.Download("https://example.test/a.tar.xz", "0" * 64, 3 << 20)
+    with pytest.raises(RuntimeError, match="larger than its pinned"):
+        FETCH(pin, tmp_path / "dl")
+    assert len(sent) <= 5
+    assert not (tmp_path / "dl" / "a.tar.xz").exists()
+
+
+def test_fetch_retries_a_stalled_mirror(monkeypatch, tmp_path):
+    import httpx
+
+    tries = []
+
+    def get(url, target, limit):
+        tries.append(url)
+        raise httpx.ReadTimeout("stalled")
+
+    monkeypatch.setattr(tools, "_get", get)
+    with pytest.raises(RuntimeError, match="couldn't download"):
+        FETCH(tools.Download("https://example.test/a", "0" * 64, 1), tmp_path)
+    assert len(tries) == tools.DOWNLOAD_ATTEMPTS
+
+
+def test_seven_zip_unpacks_only_the_binary_and_license(monkeypatch, tmp_path):
+    release = _tar(
+        tmp_path / "7z.tar.xz",
+        {"7zz": b"\x7fELF", "License.txt": b"GNU LGPL", "../evil": b"x", "MANUAL/a.htm": b"m"},
+    )
+    monkeypatch.setattr(tools, "pinned", lambda table, what: _pin(release))
+    monkeypatch.setattr(tools, "fetch", lambda item, folder: release)
+    binary = tools.install_seven_zip(tmp_path / "tools")
+    assert binary == tmp_path / "tools/7zip/7zz" and binary.stat().st_mode & 0o111
+    assert sorted(p.name for p in binary.parent.iterdir()) == ["7zz", "License.txt"]
+    assert not (tmp_path / "evil").exists()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    assert tools.seven_zip() == str(binary)
+
+
+def _deb(files: dict[str, bytes]) -> bytes:
+    import io
+    import tarfile
+
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:xz") as tar:
+        for name, body in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(body))
+    members = [
+        (b"debian-binary", b"2.0\n"),
+        (b"control.tar.xz", b"c"),
+        (b"data.tar.xz", data.getvalue()),
+    ]
+    out = b"!<arch>\n"
+    for name, body in members:
+        out += name.ljust(16) + b"0".ljust(12) + b"0".ljust(6) * 2 + b"100644".ljust(8)
+        out += str(len(body)).encode().ljust(10) + b"`\n" + body + (b"\n" if len(body) % 2 else b"")
+    return out
+
+
+def test_linux_libreoffice_comes_out_of_the_official_debs(monkeypatch, tmp_path):
+    import io
+    import tarfile
+
+    tarball = tmp_path / "lo_deb.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        for name, files in {
+            "LO/DEBS/core.deb": {"./opt/libreoffice26.8/program/soffice": b"#!/bin/sh\n"},
+            "LO/DEBS/menus.deb": {"./usr/local/bin/libreoffice": b"x", "/etc/evil": b"x"},
+        }.items():
+            body = _deb(files)
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    monkeypatch.setattr(
+        tools, "pinned", lambda table, what: tools.Download("https://x/lo_deb.tar.gz", "", 0)
+    )
+    monkeypatch.setattr(tools, "fetch", lambda item, folder: tarball)
+    soffice = tools.install_libreoffice(tmp_path / "tools")
+    assert soffice == tmp_path / "tools/libreoffice/program/soffice" and soffice.is_file()
+    # Only the install tree lands, nothing for /usr or /etc
+    assert sorted(p.name for p in (tmp_path / "tools").iterdir()) == ["libreoffice"]
+
+
+def test_install_archive_reports_a_7zip_download_that_answers_404(monkeypatch, tmp_path, capsys):
+    import httpx
+
+    calls: list[list[str]] = []
+    real = tools.install_seven_zip
+    _fake_install(monkeypatch, tmp_path, calls)
+    monkeypatch.setattr(tools, "platform_key", lambda: ("linux", "x86_64"))
+    monkeypatch.setattr(tools, "install_seven_zip", real)
+    monkeypatch.setattr(tools, "fetch", FETCH)
+
+    def stream(method, url, **kw):
+        return httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(404, content=b"gone"))
+        ).stream(method, url)
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    assert main(["doctor", "--install", "archive", "--json"]) == 0
+    rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)["results"]}
+    assert rows["install archive"]["ok"] is True
+    assert rows["install 7zip"]["ok"] is False
+    assert "404" in rows["install 7zip"]["detail"]
+    assert (tmp_path / "data/venv/.meltify-version").read_text() == doctor.__version__
+    assert not list((tmp_path / "data/tools").glob("**/*.tar.xz"))

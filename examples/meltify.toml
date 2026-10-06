@@ -2,6 +2,7 @@
 # Outside a git repository, only the working directory is searched
 # Every key is optional and falls back to the packaged defaults
 
+# Language of the text OCR reads
 lang = "ko"
 out_dir = "meltify-out"
 
@@ -19,6 +20,8 @@ dpi = 300
 [asr]
 engine = "auto"
 model = "mlx-community/whisper-large-v3-turbo"
+# Spoken language, separate from lang above. auto lets Whisper detect it per recording
+lang = "auto"
 
 [media]
 fps = 1.0

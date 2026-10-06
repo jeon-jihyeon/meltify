@@ -1,6 +1,6 @@
 {
   "name": "meltify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Melt images, PDFs, office files, mail, video and audio into prompt-ready text with a citation on every item, and check answers before they go out.",
   "author": {
     "name": "jeon-jihyeon"

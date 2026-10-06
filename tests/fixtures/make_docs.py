@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import struct
 import zipfile
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -240,4 +241,74 @@ def inline_image_mail(path: Path, image: bytes, attached: bytes) -> Path:
     )
     msg.add_attachment(attached, maintype="image", subtype="png", filename="chart.png")
     path.write_bytes(bytes(msg))
+    return path
+
+
+def _art(kind: int, body: bytes, ver: int = 0, inst: int = 0) -> bytes:
+    """One OfficeArt record, a container when ver is 0xF"""
+    return struct.pack("<HHI", ver | inst << 4, kind, len(body)) + body
+
+
+def _picture_entry(png: bytes) -> bytes:
+    """An OfficeArtFBSE holding a PNG blip after its fixed 36 bytes"""
+    blip = _art(0xF01E, bytes(16) + b"\xff" + png, inst=0x6E0)
+    head = bytes([6, 6]) + bytes(18) + struct.pack("<III", len(blip), 1, 0) + bytes(4)
+    return _art(0xF007, head + blip, ver=2, inst=6)
+
+
+def _shape(spid: int, pib: int | None) -> bytes:
+    fsp = _art(0xF00A, struct.pack("<II", spid, 0xA00), ver=2, inst=75)
+    opt = b"" if pib is None else _art(0xF00B, struct.pack("<HI", 0x4104, pib), ver=3, inst=1)
+    return _art(0xF004, fsp + opt, ver=0xF)
+
+
+def word97(path: Path, text: str, inline: bytes, floating: bytes) -> Path:
+    """A Word 97 binary whose \\x01 shows `inline` and whose \\x08 anchors `floating`
+
+    The inline picture sits in the Data stream where the character's sprmCPicLocation
+    points, the floating one in the drawing store, reached through its anchor's shape
+    """
+    from hwpx.hwp5.cfb import build_compound_file
+
+    start, page = 1024, 3
+    end = start + 2 * len(text)
+    pic = start + 2 * text.index("\x01")
+    # Character runs before, on and after the picture character, the middle one pointing
+    # at offset 0 of the Data stream and marked special
+    fkp = bytearray(512)
+    struct.pack_into("<4I", fkp, 0, start, pic, pic + 2, end)
+    fkp[16:19] = bytes([0, 240, 0])
+    chpx = struct.pack("<HI", 0x6A03, 0) + struct.pack("<HB", 0x0855, 1)
+    fkp[480 : 481 + len(chpx)] = bytes([len(chpx)]) + chpx
+    fkp[511] = 3
+
+    sp = _shape(1025, 1)
+    picf = struct.pack("<IHH", 0, 0x44, 0x64).ljust(0x44, b"\0") + sp + _picture_entry(inline)
+    data = struct.pack("<I", len(picf)) + picf[4:]
+
+    store = _art(0xF001, _picture_entry(floating), ver=0xF, inst=1)
+    drawing = _art(0xF003, _shape(1024, None) + _shape(2049, 1), ver=0xF)
+    dgg = _art(0xF000, store, ver=0xF) + b"\0" + _art(0xF002, drawing, ver=0xF)
+    clx = struct.pack("<II", 0, len(text)) + struct.pack("<HIH", 0, start, 0)
+    clx = b"\x02" + struct.pack("<I", len(clx)) + clx
+    chpx_plc = struct.pack("<III", start, end, page)
+    # One anchor naming shape 2049, then its 26 byte Spa
+    spa = struct.pack("<III", text.index("\x08"), len(text), 2049) + bytes(22)
+    table = bytearray()
+    pairs = [(0, 0)] * 93
+    for index, part in ((33, clx), (12, chpx_plc), (40, spa), (50, dgg)):
+        pairs[index] = (len(table), len(part))
+        table += part
+
+    fib = bytearray(struct.pack("<HH", 0xA5EC, 0xC1).ljust(32, b"\0"))
+    struct.pack_into("<H", fib, 10, 0x0200)  # the table stream is 1Table
+    struct.pack_into("<II", fib, 0x18, start, end)  # fcMin and fcMac, where text sits
+    longs = bytearray(88)
+    struct.pack_into("<i", longs, 12, len(text))
+    fib += struct.pack("<H", 14) + bytes(28) + struct.pack("<H", 22) + longs
+    fib += struct.pack("<H", 93) + b"".join(struct.pack("<II", *p) for p in pairs) + bytes(2)
+    doc = bytes(fib).ljust(start, b"\0") + text.encode("utf-16-le")
+    doc = doc.ljust(page * 512, b"\0") + bytes(fkp)
+    streams = {"WordDocument": doc, "1Table": bytes(table), "Data": data}
+    path.write_bytes(build_compound_file(streams.items()))
     return path

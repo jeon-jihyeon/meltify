@@ -10,7 +10,7 @@ import pytest
 
 from meltify import imaging
 from meltify.cli import main
-from meltify.converters import office, sheet
+from meltify.converters import embeds, metafile, office, quicklook, render, run, sheet
 from meltify.engines import asr
 from meltify.engines import ocr as engines
 from meltify.engines.asr import Segment
@@ -63,6 +63,7 @@ class FakeAsr:
 
     def transcribe(self, audio, lang):
         self.calls += 1
+        self.lang = lang
         return [Segment(0.5, 1.5, "안녕하세요 회의 시작합니다")]
 
 
@@ -158,14 +159,27 @@ def test_same_picture_in_several_files_reads_once_and_never_on_rerun(cached, mon
     assert len(vision.calls) == 4
 
 
-def test_office_images_cite_paragraph_slide_and_cell(tmp_path):
+def _no_drawing(monkeypatch):
+    """No program on this machine draws an EMF, whatever is installed"""
+    monkeypatch.setattr(render, "soffice", lambda: None)
+    monkeypatch.setattr(quicklook, "available", lambda: False)
+    monkeypatch.setattr(metafile, "replay_available", lambda: False)
+
+
+def test_office_images_cite_paragraph_slide_and_cell(tmp_path, monkeypatch):
+    _no_drawing(monkeypatch)
     image = card("INVOICE", (400, 120))
     docx = office.docx_images(embedded_docx(tmp_path / "memo.docx", image), Src("memo.docx"))
+    docx.draw()
     assert [j.src.cite() for j in docx.jobs] == ["memo.docx#para3#img1"]
-    assert sorted(docx.needs()) == ["1 emf image not read", "1 linked image not read"]
+    assert sorted(docx.needs()) == [
+        f"1 emf image not read ({embeds.DRAW_HINT})",
+        "1 linked image not read",
+    ]
 
     pytest.importorskip("pptx")
     deck = office.pptx_images(embedded_pptx(tmp_path / "deck.pptx", image), Src("deck.pptx"))
+    deck.draw()
     assert [j.src.cite() for j in deck.jobs] == ["deck.pptx#slide3#img2"]
 
     book = sheet.images(embedded_xlsx(tmp_path / "book.xlsx", image), Src("book.xlsx"))
@@ -284,6 +298,28 @@ def test_video_gets_transcript_scenes_and_capped_frames(cached, monkeypatch, cap
     assert (speech.calls, len(vision.calls)) == (1, 2)
 
 
+@needs_ffmpeg
+def test_speech_language_is_detected_unless_asr_lang_names_one(cached, monkeypatch, capsys):
+    import wave
+
+    speech = FakeAsr()
+    monkeypatch.setattr(asr, "select", lambda spec, s: speech)
+    clip = cached / "talk.wav"
+    with wave.open(str(clip), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * 16000)
+    # The top-level lang is the OCR text language and never reaches Whisper
+    (cached / "meltify.toml").write_text('lang = "ko"\n')
+    _read(capsys, clip)
+    assert speech.lang == "auto"
+    (cached / "meltify.toml").write_text('lang = "ko"\n[asr]\nlang = "en"\n')
+    _read(capsys, clip)
+    # A different speech language is a different cache entry, so it transcribes again
+    assert (speech.calls, speech.lang) == (2, "en")
+
+
 def _fake_web(monkeypatch, tmp_path, kind, body=b"", content_type="text/html"):
     page = tmp_path / "dl" / "page.bin"
     page.parent.mkdir(exist_ok=True)
@@ -376,7 +412,7 @@ def test_url_media_uses_subtitles_instead_of_speech(cached, monkeypatch, capsys)
         (out_dir / "v.ko.vtt").write_text(VTT)
         return None, [out_dir / "v.ko.vtt"]
 
-    monkeypatch.setattr(media, "_download", download)
+    monkeypatch.setattr(media, "download", download)
     url = "https://youtu.be/abc"
     rows, _ = _read(capsys, url)
     md = Path(rows[url]["out"]).read_text()
@@ -394,33 +430,58 @@ def test_missing_url_support_is_a_need(cached, monkeypatch, capsys):
 
 
 def test_pymupdf_converters_share_one_lock(tmp_path):
+    import threading
+
     from meltify.commands.read import Reader
+    from meltify.converters import Converted
 
     reader = Reader(tmp_path, {})
+    assert reader.pdf_lock is run.LOCK
     held = []
 
-    def convert(path, src):
-        held.append(reader.pdf_lock.locked())
-        from meltify.converters import Converted
+    def probe(free: list[bool]) -> None:
+        free.append(run.LOCK.acquire(blocking=False))
+        if free[0]:
+            run.LOCK.release()
 
+    def taken() -> bool:
+        # The lock is reentrant, so only another thread can tell whether it is held
+        free: list[bool] = []
+        t = threading.Thread(target=probe, args=(free,))
+        t.start()
+        t.join()
+        return not free[0]
+
+    def convert(path, src):
+        held.append(taken())
         return Converted("pdf")
 
+    # legacy starts soffice before PyMuPDF, so it takes the lock itself only around PyMuPDF
     for kind in ("pdf", "legacy", "text"):
         reader._convert(kind, convert, tmp_path, Src("x"))
-    assert held == [True, True, False]
+    assert held == [True, False, False]
 
 
 def test_shallow_lists_needs_like_01_and_loads_nothing(cached, monkeypatch, capsys):
     called = []
     monkeypatch.setattr(engines, "select", lambda spec, s: called.append(spec) or [])
+    monkeypatch.setattr(render, "soffice", lambda: None)
+    monkeypatch.setattr(metafile, "replay_available", lambda: False)
+    monkeypatch.setattr(quicklook, "enabled", lambda: False)
     pdf = embedded_pdf(cached / "report.pdf")
     docx = embedded_docx(cached / "memo.docx", card("A", (300, 100)))
+    # Quick Look stays off too, though this machine may have it
+    monkeypatch.setattr(quicklook, "previewable", lambda p: pytest.fail("Quick Look ran"))
     rows, _ = _read(capsys, pdf, docx, "--shallow")
-    # 0.1 never looked for pictures inside documents
-    assert rows[str(pdf)]["needs"] == ["ocr pages 3"]
+    # Pictures inside documents are counted, not read
+    assert rows[str(pdf)]["needs"] == ["ocr pages 3", "ocr"]
     assert "#img" not in Path(rows[str(pdf)]["out"]).read_text()
     docx_needs = [n for n in rows[str(docx)]["needs"] if n != "markitdown"]
-    assert docx_needs == ["1 emf image not read", "1 linked image not read"]
+    assert docx_needs == [
+        "ocr",
+        "1 linked image not read",
+        f"1 emf image not read ({embeds.DRAW_HINT})",
+    ]
     assert called == []
 
 
@@ -438,3 +499,154 @@ def test_docx_pictures_are_read_without_the_office_extra(cached, monkeypatch, ca
     assert "markitdown" in needs
     # With no engine at hand the picture is still found and listed for OCR
     assert any(n.startswith("ocr") for n in needs)
+
+
+def test_ffmpeg_failure_on_one_video_leaves_a_need_not_a_crash(cached, monkeypatch):
+    from meltify import ffmpeg
+    from meltify.converters import RecognizeJob
+    from meltify.recognize import Options, Recognizer
+
+    _engines(monkeypatch, Fake("vision", ["frame text"]))
+    monkeypatch.setattr(asr, "select", lambda spec, s: FakeAsr())
+    monkeypatch.setattr(
+        "meltify.recognize._has_audio", lambda path: pytest.fail("frames are tried first")
+    )
+
+    def refuse(path, out_dir, threshold, window):
+        raise RuntimeError("ffmpeg exited 234: no decoder found for: svg")
+
+    monkeypatch.setattr(ffmpeg, "scene_frames", refuse)
+    clip = cached / "pic.qqq"
+    clip.write_bytes(b"not decodable")
+    image = cached / "a.png"
+    image.write_bytes(card("STILL READ", (300, 100)))
+    warned = []
+    rec = Recognizer(Options(), {}, warned.append)
+    jobs = [
+        RecognizeJob("video", Src("pic.qqq"), path=clip),
+        RecognizeJob("image", Src("a.png"), path=image),
+    ]
+    # Already transcribed, so only the frames are needed and ffmpeg fails on them
+    video, still = rec.run(jobs, transcribed={Src("pic.qqq")})
+    assert video.left == "failed" and video.blocks == []
+    assert still.left is None and "frame text" in still.blocks[0].text
+    assert warned == ["can't read pic.qqq: ffmpeg exited 234: no decoder found for: svg"]
+
+
+def test_rendered_pages_key_on_their_source_not_the_render(tmp_path, monkeypatch):
+    from meltify.converters import RecognizeJob
+    from meltify.recognize import Options, Recognizer
+
+    source = tmp_path / "memo.wps"
+    source.write_bytes(b"works memo")
+    made = iter(range(2))
+
+    def convert_to(path, target, out_dir, timeout):
+        # soffice stamps every PDF with the time it was made
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pdf = out_dir / f"{path.stem}.pdf"
+        pdf.write_bytes(f"%PDF-1.7 CreationDate {next(made)}".encode())
+        return pdf
+
+    monkeypatch.setattr(render, "soffice", lambda: "/opt/soffice")
+    monkeypatch.setattr(render, "convert_to", convert_to)
+    pdfs = [render.to_pdf(source, out_dir=tmp_path / f"r{n}") for n in range(2)]
+    assert pdfs[0].read_bytes() != pdfs[1].read_bytes()
+    reader = Recognizer(Options(), {}, print)
+    keys = {reader.key(RecognizeJob("page", Src(str(source), page=1), path=p)) for p in pdfs}
+    assert len(keys) == 1
+
+
+@dataclass
+class Slow(Fake):
+    """A fake that takes a while and counts how many of its calls overlap"""
+
+    delay: float = 0.2
+    running: int = 0
+    peak: int = 0
+
+    def recognize(self, image, size):
+        import threading
+        import time
+
+        lock = self.__dict__.setdefault("_lock", threading.Lock())
+        with lock:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        time.sleep(self.delay)
+        with lock:
+            self.running -= 1
+        return super().recognize(image, size)
+
+
+def _cards(folder, n):
+    folder.mkdir()
+    for i in range(n):
+        (folder / f"{i}.png").write_bytes(card(f"CARD {i}", (300, 100)))
+    return folder
+
+
+def test_uncached_pictures_are_read_side_by_side_in_job_order(cached, monkeypatch, capsys):
+    from meltify import recognize
+
+    vision, paddle = _engines(
+        monkeypatch, Slow("vision", ["SAME"]), Slow("paddle", ["SAME"], delay=0.05)
+    )
+    folder = _cards(cached / "in", 6)
+    rows, _ = _read(capsys, folder)
+    # Vision overlaps, while Paddle keeps one model that takes a job at a time
+    assert vision.peak > 1 and paddle.peak == 1
+    parallel = {c: Path(r["out"]).read_text() for c, r in rows.items()}
+
+    monkeypatch.setattr(recognize, "WORKERS", 1)
+    rows, _ = _read(capsys, folder, "--refresh")
+    assert {c: Path(r["out"]).read_text() for c, r in rows.items()} == parallel
+
+
+def test_worker_warnings_come_out_in_job_order(cached, monkeypatch, capsys):
+    import time
+
+    class Failing(Fake):
+        def recognize(self, image, size):
+            # Later jobs finish first, so only the reordering keeps the warnings in order
+            n = int(Image.open(image).width)
+            time.sleep(max(0, 2000 - n) / 4000)
+            raise RuntimeError(f"broke on width {n}")
+
+    from PIL import Image
+
+    _engines(monkeypatch, Failing("vision", []))
+    folder = cached / "in"
+    folder.mkdir()
+    for i in range(5):
+        (folder / f"{i}.png").write_bytes(card(f"W{i}", (300 + 40 * i, 100)))
+    _, out = _read(capsys, folder)
+    widths = [int(re.search(r"width (\d+)", w).group(1)) for w in out["warnings"] if "broke" in w]
+    assert widths == sorted(widths) and len(set(widths)) == 5
+
+
+def test_big_pictures_wait_for_ocr_on_disk_with_the_same_cache_key(tmp_path, monkeypatch):
+    from meltify.commands.read import SPILL_BYTES, Reader
+    from meltify.converters import Converted, RecognizeJob
+    from meltify.recognize import Options, Recognizer
+
+    temps = run.Temps()
+    run.use(run.RunContext(temps=temps))
+    try:
+        big = card("BIG", (2000, 1500)) + bytes(SPILL_BYTES)
+        small = card("SMALL", (200, 80))
+        reader = Reader(tmp_path / "out", {})
+        jobs = [
+            RecognizeJob("image", Src("a.docx", img=n), data=d) for n, d in ((1, big), (2, small))
+        ]
+        reader.keep(Converted("office", jobs=jobs), "a.docx", 0, {}, "a.docx")
+        held = reader.outputs[0].converted.jobs
+        assert held[0].data is None and held[0].path.read_bytes() == big
+        assert held[1].data == small
+        rec = Recognizer(Options(), {}, lambda m: None)
+        assert [rec.key(j) for j in held] == [rec.key(j) for j in jobs]
+        spill = held[0].path.parent
+    finally:
+        temps.remove()
+        run.use(None)
+    assert not spill.exists()

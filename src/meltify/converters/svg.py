@@ -6,7 +6,8 @@ from pathlib import Path
 from xml.parsers import expat
 
 from meltify.converters import Block, Converted
-from meltify.converters.odf import ENTITY
+from meltify.converters.embeds import gunzip
+from meltify.converters.xmlsafe import REFUSED, refuse_entities
 from meltify.evidence import Src
 
 # Elements whose character data is what a viewer reads or a screen reader announces
@@ -52,8 +53,7 @@ def _zero(value: str | None) -> bool:
 
 
 def _parse(data: bytes) -> list[_Item]:
-    if any(e in data for e in ENTITY):
-        raise ValueError("refusing XML with <!ENTITY declarations")
+    refuse_entities(data)
     parser = expat.ParserCreate(namespace_separator=" ")
     parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
     stack = [_Frame(False, "visible")]
@@ -61,7 +61,7 @@ def _parse(data: bytes) -> list[_Item]:
     items: list[_Item] = []
 
     def refuse(*_: object) -> None:
-        raise ValueError("refusing XML with <!ENTITY declarations")
+        raise ValueError(REFUSED)
 
     def start(name: str, attrs: dict[str, str]) -> None:
         props = _props(attrs)
@@ -107,7 +107,14 @@ def convert(path: Path, src: Src) -> Converted:
             out.blocks.append(Block(replace(src, line=loose[0][0]), text))
             loose.clear()
 
-    for item in _parse(path.read_bytes()):
+    data = path.read_bytes()
+    if data.startswith(b"\x1f\x8b"):
+        # An .svgz is the same XML gzipped
+        unpacked = gunzip(data)
+        if unpacked is None:
+            return Converted("svg", needs=["svgz not read (corrupt or over the unpack limit)"])
+        data = unpacked
+    for item in _parse(data):
         text = LABELS.get(item.kind, "") + item.text
         if item.hidden:
             out.hidden += 1

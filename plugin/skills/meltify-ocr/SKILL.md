@@ -4,7 +4,7 @@ description: Read text in images, screenshots, photos and scanned PDF pages with
 license: MIT
 compatibility: Needs uv or meltify on PATH. Apple Vision runs on macOS. PaddleOCR needs the ocr-paddle extra. LLM engines need their API key.
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   cli: meltify ocr
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write
 ---

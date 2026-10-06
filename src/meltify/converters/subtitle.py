@@ -4,17 +4,47 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
-from meltify.commands.media import parse_subtitles
 from meltify.converters import Block, Converted
 from meltify.converters.text import decode
-from meltify.evidence import Src, _clock
+from meltify.evidence import Src, clock
 
 # Cues per block, so a two-hour film doesn't become one giant quote
 BLOCK_CUES = 50
 
+CUE = re.compile(r"(\d+:)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d+:)?(\d{2}):(\d{2})[.,](\d{3})")
 ASS_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[.:](\d{1,3})")
 ASS_FIELDS = ["layer", "start", "end", "style", "name", "marginl", "marginr", "marginv"]
 ASS_FIELDS += ["effect", "text"]
+
+
+def _seconds(h: str | None, m: str, s: str, ms: str) -> float:
+    return int((h or "0:")[:-1]) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+
+def parse_subtitles(text: str) -> list[tuple[float, float, str]]:
+    """VTT or SRT cues with tags stripped and rolling repeats merged"""
+    cues: list[tuple[float, float, str]] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = CUE.search(lines[i])
+        if not m:
+            i += 1
+            continue
+        start = _seconds(m.group(1), m.group(2), m.group(3), m.group(4))
+        end = _seconds(m.group(5), m.group(6), m.group(7), m.group(8))
+        body = []
+        i += 1
+        while i < len(lines) and lines[i].strip():
+            body.append(re.sub(r"<[^>]+>", "", lines[i]).strip())
+            i += 1
+        said = " ".join(b for b in body if b)
+        # Auto captions repeat the previous line as they roll, so keep only the new text
+        if cues and said.startswith(cues[-1][2]) and said != cues[-1][2]:
+            said = said[len(cues[-1][2]) :].strip()
+        if said and (not cues or said != cues[-1][2]):
+            cues.append((round(start, 2), round(end, 2), said))
+    return cues
 
 
 def _ass_seconds(value: str) -> float | None:
@@ -57,6 +87,6 @@ def convert(path: Path, src: Src) -> Converted:
         return out
     for i in range(0, len(cues), BLOCK_CUES):
         chunk = cues[i : i + BLOCK_CUES]
-        body = "\n".join(f"{_clock(s)}-{_clock(e)}| {said}" for s, e, said in chunk)
+        body = "\n".join(f"{clock(s)}-{clock(e)}| {said}" for s, e, said in chunk)
         out.blocks.append(Block(replace(src, t=(chunk[0][0], chunk[0][1])), body))
     return out
