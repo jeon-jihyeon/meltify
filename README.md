@@ -51,8 +51,8 @@ Each command has a skill of the same name, such as `meltify-ocr`, that tells the
 
 | Group | Formats | Needs |
 |---|---|---|
-| Documents | PDF, Word `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot`, HWP and HWPX, RTF, ODT, Pages, WordPerfect, EPUB, XPS, FictionBook, MOBI, HTML, Markdown and plain text | `office` for Word and EPUB |
-| Spreadsheets | Excel `.xlsx` `.xlsm` `.xltx` `.xltm` `.xlsb` `.xls` `.xlt`, Hancom `.cell`, ODS, Numbers, CSV and TSV | `office` for `.xlsb`, `.xls` and `.xlt`, `iwork` for Numbers |
+| Documents | PDF, Word `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot`, HWP and HWPX, RTF, ODT, Pages, WordPerfect, EPUB, XPS, FictionBook, MOBI, HTML and Safari `.webarchive`, Markdown and plain text | `office` for Word and EPUB |
+| Spreadsheets | Excel `.xlsx` `.xlsm` `.xltx` `.xltm` `.xlsb` `.xls` `.xlt`, Hancom `.cell`, ODS, Numbers, Parquet, CSV and TSV | `office` for `.xlsb`, `.xls` and `.xlt`, `iwork` for Numbers, `parquet` for Parquet |
 | Slides | PowerPoint `.pptx` `.pptm` `.potx` `.potm` `.ppsx` `.ppsm` `.ppt` `.pps` `.pot`, Hancom `.show`, ODP, Keynote | `office` for PowerPoint |
 | Drawings | ODG, SVG and `.svgz`, EMF and WMF with `.emz` and `.wmz`, comic book `.cbz` | |
 | Mail and chat | `.eml`, `.msg`, mbox, KakaoTalk exports, Slack export zips | `office` for `.msg` |
@@ -138,6 +138,7 @@ Optional parts install on request with `meltify doctor --install NAME`:
 | `office` | Word, PowerPoint, Outlook `.msg` and EPUB, legacy `.doc`, `.ppt`, `.xls` and `.xlsb`, faster `.xlsx` reading through calamine, and drawing EMF pictures without LibreOffice |
 | `archive` | 7z and rar through the system libarchive, plus a pinned 7-Zip download for encrypted ones |
 | `iwork` | Numbers tables. Pages and Keynote need nothing extra |
+| `parquet` | Parquet files, the first 200 rows and per-column min, max and null counts |
 | `crypto` | encrypted Office files, AES zips, and password-protected HWP and iWork files |
 | `render` | `read --render` for JavaScript-heavy pages, using your Chrome or a downloaded Chromium |
 | `media` | video URLs through yt-dlp |
@@ -160,6 +161,7 @@ See [examples/meltify.toml](examples/meltify.toml) for a sample. A few keys wort
 
 - `lang` is the language OCR expects (`ko` by default)
 - `asr.lang` is the spoken language for speech engines. It's `auto` by default, separate from `lang`, so Whisper detects each recording's language instead of translating it
+- `read.parquet_rows` sets how many Parquet rows melt per file
 - `render.quicklook = false` keeps Quick Look and Spotlight out of every render
 
 ## Limits
@@ -171,6 +173,7 @@ See [examples/meltify.toml](examples/meltify.toml) for a sample. A few keys wort
 - Rendered rows, EMF bitmaps and Quick Look previews are only as good as the OCR that reads them, and Quick Look exists only on macOS
 - Pages and Keynote charts are listed in `needs` instead of read, and a Pages or Keynote file with no text records falls back to its embedded preview image
 - DRM-protected HWP files, password-protected WordPerfect files, and Hancom `.cell` and `.show` files from before 2014 and Hanshow `.hpt` files, which are binary, aren't read. Save the Hancom ones again as `.xlsx` or `.pptx`
+- Parquet files show their first 200 rows, and the rest are counted in `needs`
 - Encrypted 7z and rar need 7-Zip, which `meltify doctor --install archive` downloads. Plain ones open with the system libarchive, a separate package on Linux, with 7-Zip, or with `bsdtar` on macOS
 - The plugin launcher is a POSIX shell script and `doctor --install` only downloads macOS and Linux builds, so Windows isn't supported
 

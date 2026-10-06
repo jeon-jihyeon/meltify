@@ -71,6 +71,9 @@ class RunContext:
     fallback: bool = True  # read.fallback
     # read --shallow, which starts no renderer or subprocess that only feeds OCR
     shallow: bool = False
+    # read.parquet_rows, 0 for every row. A data file can hold billions of rows, so only the
+    # head is melted and the rest counted
+    parquet_rows: int = 200
     quicklook: bool = True  # render.quicklook
     # State the run's workers share, which two runs with the same settings still don't
     budget: Budget = field(default_factory=Budget, compare=False)

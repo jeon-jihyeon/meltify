@@ -4,7 +4,7 @@ description: Check which meltify engines, binaries and API keys are available on
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.1"
+  version: "0.2.2"
   cli: meltify doctor
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---
@@ -37,6 +37,6 @@ Report what meltify can use on this machine and how to fix what's missing.
 ## Then
 
 1. Tell the user which failed checks block the task at hand, and give the hint for each.
-2. Don't install anything without the user's go-ahead. Once you have it, run `meltify doctor --install NAME` with the extra the hint names: `office` for Word, PowerPoint, Outlook, EPUB, `.doc`, `.ppt`, `.xls`, `.xlsb`, faster `.xlsx` reading and EMF drawing, `archive` for 7z and rar, `crypto` for encrypted Office, zip, HWP and iWork files, `iwork` for Numbers, `render` for `read --render`, `media` for video URLs, `asr-mlx` or `ocr-paddle` for local engines. The extra goes into a venv in the data dir, which the launcher runs ahead of any other meltify on PATH. `render` also downloads Chromium when Chrome isn't installed, and `archive` also downloads a pinned 7-Zip.
+2. Don't install anything without the user's go-ahead. Once you have it, run `meltify doctor --install NAME` with the extra the hint names: `office` for Word, PowerPoint, Outlook, EPUB, `.doc`, `.ppt`, `.xls`, `.xlsb`, faster `.xlsx` reading and EMF drawing, `archive` for 7z and rar, `crypto` for encrypted Office, zip, HWP and iWork files, `iwork` for Numbers, `parquet` for Parquet, `render` for `read --render`, `media` for video URLs, `asr-mlx` or `ocr-paddle` for local engines. The extra goes into a venv in the data dir, which the launcher runs ahead of any other meltify on PATH. `render` also downloads Chromium when Chrome isn't installed, and `archive` also downloads a pinned 7-Zip.
 3. For `bin soffice`, `meltify doctor --install libreoffice` downloads a pinned portable LibreOffice of 200 to 300 MB on macOS and Linux. Ask first, since it's large. `lib libarchive` and `bin wpd2text` are system packages, not extras. Give the user the hint instead of installing them yourself.
 4. Missing optional engines are fine when another engine covers the task.

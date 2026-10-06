@@ -4,7 +4,7 @@ description: Check an answer file or a single string against its stated output f
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.1"
+  version: "0.2.2"
   cli: meltify check
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write
 ---

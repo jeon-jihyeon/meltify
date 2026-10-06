@@ -2,9 +2,9 @@
 name: meltify-read
 description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images and recordings, into cited markdown, with images, scans and recordings read by local OCR and speech engines, and list which items still need OCR, transcription or a hidden-text check. Use whenever an answer, summary or document is built from such files or pages, even one or two named files or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip or curl, so every fact can be quoted with its page, cell, line, attachment or timestamp.
 license: MIT
-compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files need the office extra, 7z and rar the archive extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look.
+compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look.
 metadata:
-  version: "0.2.1"
+  version: "0.2.2"
   cli: meltify read
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -47,13 +47,14 @@ Turn every input into markdown where each block starts with a citation, then wor
   - `ocr (failed)`: the engines couldn't read it. Run the meltify-ocr skill on that item
   - `hidden N spans` or `hidden sheets`: run the meltify-hidden skill, or open those sheets
   - `render`: the page looks script-built. Rerun with `--render`
-  - `markitdown`, `archive extra (meltify doctor --install archive)`, `iwork extra (meltify doctor --install iwork)`, `encrypted, needs the crypto extra (meltify doctor --install crypto)`, `encrypted, needs 7-Zip and a password (meltify doctor --install archive)` or `... (install LibreOffice, or run meltify doctor --install libreoffice)`: a part is missing. Install it once the user agrees
+  - `markitdown`, `pyarrow`, `archive extra (meltify doctor --install archive)`, `iwork extra (meltify doctor --install iwork)`, `encrypted, needs the crypto extra (meltify doctor --install crypto)`, `encrypted, needs 7-Zip and a password (meltify doctor --install archive)` or `... (install LibreOffice, or run meltify doctor --install libreoffice)`: a part is missing. Install it once the user agrees
   - `... not read (not drawn under --shallow)`: a picture or slide only OCR could read. Rerun without `--shallow`
   - `encrypted, set MELTIFY_PASSWORD or --password-file`: the file is locked. Ask the user for the password and rerun as in Run step 5
   - `wrong password`: the password didn't open it. Ask the user again instead of guessing
   - `DRM-protected, open it with the DRM client`, `encrypted for distribution, can't decrypt` or `encrypted, can't decrypt (...)`: meltify can't open it at all. Tell the user
   - `... not read`, such as `2 images not read (over the 256 MiB picture total)`, `iwork preview only`, `first page only, read from a Quick Look preview` or `text only, read by macOS Spotlight without layout or pictures`: that part of the item wasn't melted, or was melted roughly. Say so if it matters
   - `WordPerfect read by the built-in walker, ...`: formatting codes may show up in the text, and headers, footers and footnotes are missing. Say so if they matter
+  - `N more rows not read`: a Parquet file showed only its first rows. Query the file itself if the answer needs the rest
   - `unsupported format`: nothing could read the file. Say so instead of guessing at its content
 
 ## Gotchas

@@ -43,6 +43,7 @@ Archives, mail and documents are melted without extracting anything outside `mel
 - Every XML part of a Word or PowerPoint package is checked against the 64 MiB part limit and the 100:1 ratio before any reader opens the file
 - Pillow's decompression bomb limit is never raised, so images past it fail instead of filling memory
 - A single file compressed with gz, bz2 or xz goes through the same size, ratio and total limits as an archive member
+- Parquet rows come only from row groups that declare 256 MiB or less unpacked in total, and the row groups past that are listed in `needs`
 - A picture over 64 MiB, or one over 1 MiB that expands more than 100:1, is skipped before it's read, and an EPUB's spine documents stop at 256 MiB in total
 - The pictures one Office, ODF, HWP, RTF, EPUB, HTML or Outlook document unpacks share a 256 MiB total. A picture shown many times is held once, and pictures past the total are listed in `needs`
 - A password HWPX is decrypted under a budget of 100 times the file's size, at least 64 MiB and at most 512 MiB. Each part is inflated only up to the 64 MiB part limit, and a part past either stops the file with a `needs` entry
