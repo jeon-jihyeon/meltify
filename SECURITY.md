@@ -55,7 +55,7 @@ Archives, mail and documents are melted without extracting anything outside `mel
 `read` opens encrypted PDF, Office, HWP, iWork, zip, 7z and RAR files only with a password you give it:
 
 - `--password-file PATH` reads the first line of a file, and `MELTIFY_PASSWORD` reads the environment. `--password` works too, but other users on the machine can see it in the process list, so `read` warns when you use it
-- When more than one is set, `--password-file` wins, then `--password`, then `MELTIFY_PASSWORD`.
+- When more than one is set, `--password-file` wins, then `--password`, then `MELTIFY_PASSWORD`
 - A document that stays locked gets a row with only its `needs` entry, and no markdown is written for it
 - The password never goes into argv. 7-Zip gets it on stdin, and every other format is decrypted in-process
 - A decrypted copy of a PDF or Office file goes into a private temporary directory, removed right after conversion, or when the process exits if its pages still wait for OCR
@@ -80,7 +80,7 @@ Some formats need a program outside Python. Each one runs with an argument list 
 
 `read` also runs its own work in parallel:
 
-- With `--jobs` above 1 (8 by default), PDFs convert in worker processes started with `spawn`, since PyMuPDF isn't thread-safe.
+- With `--jobs` above 1 (8 by default), PDFs convert in worker processes started with `spawn`, since PyMuPDF isn't thread-safe
 - OCR and speech run up to 4 jobs at once. PaddleOCR and the speech engines keep one stateful model each, so each takes one job at a time under its own lock, while Apple Vision and paid API engines take jobs side by side
 
 ## Downloaded programs

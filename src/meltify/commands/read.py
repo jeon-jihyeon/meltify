@@ -628,7 +628,6 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
             password=given_password(args, env.warnings.append, password),
             fallback=bool(conf.get("fallback", True)),
             shallow=args.shallow,
-            # --shallow is a quick inventory, so it starts no Quick Look process
             quicklook=looks,
             temps=temps,
         )
