@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
@@ -175,6 +177,26 @@ def test_total_budget_spans_nested_archives(tmp_path, monkeypatch):
     assert nested.needs == ["stopped at docs/b.txt (total over 40 bytes), later members unread"]
     # The next run starts over, even for an archive nested in something else
     assert _run().run(archive.convert, top, Src(str(top), parts=("again.tar",))).needs == []
+
+
+def test_repeated_reads_of_a_zip_in_a_mail_dont_add_up(tmp_path, monkeypatch):
+    import meltify
+
+    member = tmp_path / "inner.zip"
+    with zipfile.ZipFile(member, "w") as z:
+        z.writestr("big.bin", b"x" * 300)
+    mail = EmailMessage()
+    mail["Subject"] = "zipped"
+    mail.set_content("see attached")
+    mail.add_attachment(member.read_bytes(), "application", "zip", filename="inner.zip")
+    path = tmp_path / "z.eml"
+    path.write_bytes(mail.as_bytes())
+    # Room for one read, so a budget carried into the next would stop it
+    monkeypatch.setattr(archive, "MAX_TOTAL_BYTES", 500)
+    for n in range(3):
+        env = meltify.read(path, out=tmp_path / f"out{n}", shallow=True)
+        rows = {r["cite"]: r for r in env.results}
+        assert rows[f"{path}#att=inner.zip"]["needs"] == []
 
 
 def test_a_skipped_stream_member_still_charges_the_budget(monkeypatch):

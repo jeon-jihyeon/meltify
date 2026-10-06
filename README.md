@@ -30,6 +30,18 @@ Command line only:
 uvx meltify read ./inputs
 ```
 
+From Python, after `pip install meltify`:
+
+```python
+import meltify
+
+env = meltify.read("./inputs", out="melted", shallow=True)
+for row in env.results:
+    print(row["cite"], row["out"], row["needs"])
+```
+
+`meltify.read` takes the same flags as the command as keywords and returns the same result envelope that `--json` prints. A string option gets the flag's own type, so `password_file="pw.txt"` arrives as a path and `budget="60"` as a number. For encrypted files, pass `password=`: it outranks `--password-file` and never touches argv. Only the names exported from `meltify` are public. Every other module is internal and can change in any release.
+
 The skills call the `meltify` command. If it isn't installed, the plugin launcher runs it through `uvx`, so [uv](https://docs.astral.sh/uv/) is the only thing you need.
 
 ## What it does
