@@ -57,7 +57,7 @@ parquet = ["pyarrow>=17"]
 render = ["playwright>=1.50"]
 media = ["yt-dlp>=2026.8.19"]
 asr-mlx = ["mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'"]
-ocr-paddle = ["paddleocr>=3.2", "paddlepaddle>=3.2"]
+ocr-paddle = ["paddleocr>=3.7.0", "paddlepaddle>=3.2"]
 all = ["meltify[office,media,asr-mlx,archive,parquet,crypto]"]
 
 [project.urls]
@@ -70,7 +70,7 @@ Releases = "https://github.com/jeon-jihyeon/meltify/releases"
 meltify = "meltify.cli:main"
 
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
+requires = ["uv_build>=0.12.21,<0.13"]
 build-backend = "uv_build"
 
 [dependency-groups]
