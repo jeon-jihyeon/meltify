@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from meltify import __version__
+from meltify.config import pick
 from meltify.evidence import USAGE, Envelope, Src, finding
-from meltify.needs import error_note
+from meltify.needs import ITEM_NOTE, error_note
 from meltify.output import append_jsonl, read_jsonl
 
 NAME = "submit"
@@ -189,7 +190,7 @@ class Submitter:
                 try:
                     r = self._request(path)
                 except Exception as e:  # noqa: BLE001
-                    response = error_note(e, 300)
+                    response = error_note(e, ITEM_NOTE)
                     break
                 if r.status_code == 429:
                     status = "http 429"
@@ -217,7 +218,7 @@ class Submitter:
                     status = f"http {r.status_code}"
                 break
         except Exception as e:  # noqa: BLE001
-            status, response = "error", error_note(e, 300)
+            status, response = "error", error_note(e, ITEM_NOTE)
         finally:
             # Log even when interrupted. The endpoint already saw the request,
             # and a restart must keep the gap from it
@@ -274,24 +275,21 @@ class Submitter:
 
 
 def _policy(args: argparse.Namespace, conf: dict[str, Any]) -> Policy:
-    def pick(cli: Any, key: str) -> Any:
-        return cli if cli is not None else conf.get(key)
-
-    until = pick(args.until_score, "until_score")
-    deadline = pick(args.deadline, "deadline")
+    until = pick(args.until_score, conf["until_score"])
+    deadline = pick(args.deadline, conf["deadline"])
     return Policy(
-        url=pick(args.url, "url") or "",
-        gap=float(pick(args.gap, "gap")),
-        mode=pick(args.mode, "mode"),
-        field=pick(args.field, "field"),
-        auth_env=conf.get("auth_env", ""),
-        score_path=pick(args.score_path, "score_path"),
-        goal=pick(args.goal, "goal"),
+        url=pick(args.url, conf["url"]),
+        gap=float(pick(args.gap, conf["gap"])),
+        mode=pick(args.mode, conf["mode"]),
+        field=pick(args.field, conf["field"]),
+        auth_env=conf["auth_env"],
+        score_path=pick(args.score_path, conf["score_path"]),
+        goal=pick(args.goal, conf["goal"]),
         until_score=float(until) if until not in (None, "") else None,
-        max_attempts=int(pick(args.max_attempts, "max_attempts") or 0),
+        max_attempts=int(pick(args.max_attempts, conf["max_attempts"])),
         deadline=datetime.fromisoformat(deadline).timestamp() if deadline else None,
-        idle_exit=float(pick(args.idle_exit, "idle_exit") or 0),
-        max_errors=int(conf.get("max_errors", 5)),
+        idle_exit=float(pick(args.idle_exit, conf["idle_exit"])),
+        max_errors=int(conf["max_errors"]),
     )
 
 
@@ -309,7 +307,7 @@ def _row(a: dict[str, Any], best: dict[str, Any] | None) -> dict[str, Any]:
 def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
     env = Envelope(command=NAME, version=__version__)
     base = Path(settings["out_dir"]) / "submit"
-    policy = _policy(args, settings.get("submit", {}))
+    policy = _policy(args, settings["submit"])
     s = Submitter(policy, base / "attempts.jsonl")
     env.artifact(str(s.log), "results")
 

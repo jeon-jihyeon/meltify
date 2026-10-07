@@ -9,12 +9,12 @@
 # scripts/sync_version.py writes VERSION and copies this file into the plugin and every skill
 set -eu
 
-VERSION="0.2.3"
+VERSION="0.2.4"
 REPO="jeon-jihyeon/meltify"
 DATA="${CLAUDE_PLUGIN_DATA:-${XDG_DATA_HOME:-${HOME}/.local/share}/meltify}"
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-
 dir="$HERE"
+# Five levels reach the repo root from the deepest copy, plugin/skills/NAME/scripts
 for _ in 1 2 3 4 5; do
   if [ -f "${dir}/pyproject.toml" ] && grep -q '^name = "meltify"' "${dir}/pyproject.toml" &&
     command -v uv >/dev/null 2>&1; then
@@ -23,7 +23,13 @@ for _ in 1 2 3 4 5; do
   dir=$(dirname -- "$dir")
 done
 
+# Tells `meltify doctor --install` that this launcher, which checks the data dir venv
+# before PATH and uvx, will pick up an extra installed there. A source checkout above
+# never reads that venv, so it doesn't get the flag
+export MELTIFY_LAUNCHER=1
+
 venv_bin="${DATA}/venv/bin/meltify"
+# doctor writes the version it installed, so a venv left from an older release is passed over
 if [ -x "$venv_bin" ] && [ "$(cat "${DATA}/venv/.meltify-version" 2>/dev/null || true)" = "$VERSION" ]; then
   exec "$venv_bin" "$@"
 fi

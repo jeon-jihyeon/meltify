@@ -1,7 +1,8 @@
 """Readable text of a saved web page, cited by heading anchor and line
 
-`src.path` is the page URL, so a cite looks like `https://x.org/doc#install:28`, where
-28 is the line in the extracted text and `install` is the id of the heading above it.
+`src.path` is the URL for a fetched page and the file path for a saved .html file or a
+webarchive, so a fetched cite looks like `https://x.org/doc#install:28`, where 28 is the
+line in the extracted text and `install` is the id of the heading above it.
 Pictures cite the same anchor plus their index on the page, as in `doc#install#img3`
 """
 
@@ -139,7 +140,7 @@ def page_images(tree, src: Src, load: Load, embeds: Embeds) -> None:
         if el.tag in HEADS:
             anchor = _heading_id(el)
             continue
-        # Lazy loading pages keep a placeholder in src and the real picture in data-src
+        # Lazy-loading pages keep a placeholder in src and the real picture in data-src
         ref = el.get("data-src") or el.get("src") or el.get("href") or el.get(XLINK_HREF)
         # The HTML parser keeps an SVG image's namespaced attribute under its literal name
         ref = (ref or el.get("xlink:href") or "").strip()

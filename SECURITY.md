@@ -6,8 +6,10 @@ Please report vulnerabilities through a private GitHub security advisory on this
 
 ## What meltify sends where
 
-- `ocr` with the `claude`, `gemini` or `openai` engine uploads the prepared image or its tiles to that provider
-- `media --asr api` uploads the extracted audio to the configured transcription endpoint
+The data directory below is `$CLAUDE_PLUGIN_DATA` when the plugin sets it, else `${XDG_DATA_HOME:-~/.local/share}/meltify`.
+
+- `ocr` and `read --engines` with the `claude`, `gemini` or `openai` engine upload the prepared image or its tiles to that provider
+- `media --asr api` and `read --asr api` upload the extracted audio to the configured transcription endpoint
 - `submit` uploads candidate files to the URL you configure
 - `doctor --probe` makes one tiny request per configured key
 - `read` with a URL fetches that URL, its redirects and the site's `robots.txt`. With `--render`, the headless browser also loads the page's scripts, styles and API calls
@@ -17,7 +19,7 @@ Please report vulnerabilities through a private GitHub security advisory on this
 - The local PaddleOCR and MLX Whisper engines download their model weights from their publishers the first time they run, which `read` triggers too when it meets an image or a recording. PaddleOCR keeps them under `~/.paddlex`, MLX Whisper in the Hugging Face cache
 - Nothing else touches the network. Once the models are cached, local engines and every other command run offline
 
-## URLs in `read`
+## URLs in `read` and `media`
 
 `read` treats every URL and everything it links to as untrusted:
 
@@ -30,6 +32,8 @@ Please report vulnerabilities through a private GitHub security advisory on this
 - Downloads stop at 20 MB (`--max-bytes`), connections time out after 10 seconds and a whole fetch after 30, and requests to one host are spaced at least a second apart
 - `--allow-private` lifts only the address check, for intranet pages you trust
 
+A video URL, given to `media` or found by `read`, gets the same scheme and address check before yt-dlp sees it. yt-dlp then makes its own requests, for manifests and media segments, which meltify doesn't check one by one. `media --allow-private` lifts the address check there too.
+
 ## Archives and documents
 
 Archives, mail and documents are melted without extracting anything outside `meltify-out/`:
@@ -40,12 +44,13 @@ Archives, mail and documents are melted without extracting anything outside `mel
 - Archives and attachments nest at most 3 levels deep
 - Member names lose `..`, leading slashes and drive letters before they reach a path or a cite. Symlinks, hard links and device files are skipped, and so are encrypted members unless you give a password
 - XML with `<!ENTITY` declarations is refused, which stops entity expansion bombs and external entities
-- Every XML part of a Word or PowerPoint package is checked against the 64 MiB part limit and the 100:1 ratio before any reader opens the file
+- Every XML part of a Word or PowerPoint package is checked against the 64 MiB part limit and the 100:1 ratio before any reader opens the file. Excel `.xlsx` packages skip this pre-check and go straight to openpyxl or calamine
 - Pillow's decompression bomb limit is never raised, so images past it fail instead of filling memory
 - A single file compressed with gz, bz2 or xz goes through the same size, ratio and total limits as an archive member
 - Parquet rows come only from row groups that declare 256 MiB or less unpacked in total, and the row groups past that are listed in `needs`
 - A picture over 64 MiB, or one over 1 MiB that expands more than 100:1, is skipped before it's read, and an EPUB's spine documents stop at 256 MiB in total
 - The pictures one Office, ODF, HWP, RTF, EPUB, HTML or Outlook document unpacks share a 256 MiB total. A picture shown many times is held once, and pictures past the total are listed in `needs`
+- A password HWP file decrypts at most 4 MiB of embedded pictures, since decryption is slow in Python. The body text is always read, and the pictures past that are listed in `needs`
 - A password HWPX is decrypted under a budget of 100 times the file's size, at least 64 MiB and at most 512 MiB. Each part is inflated only up to the 64 MiB part limit, and a part past either stops the file with a `needs` entry
 - A Safari web archive melts each distinct frame once, at most 100 of them, and never more frame data than twice the archive's own size. The rest are listed in `needs`
 - A local HTML page reads pictures only from its own folder, symlinks resolved, and a fetched page reads only `data:` pictures. Remote pictures are listed in `needs` and never downloaded
@@ -96,7 +101,22 @@ Some formats need a program outside Python. Each one runs with an argument list 
 
 ## Install sources
 
-The only official sources are the `meltify` package on PyPI and the GitHub repository `jeon-jihyeon/meltify`. The launcher fetches `meltify==VERSION` from PyPI by name. Until this project registers that name, a third party could publish a package under it. Set `MELTIFY_FROM_GIT=1` to fetch the tagged release from GitHub instead, or install from the repository yourself.
+The only official sources are the `meltify` package on PyPI and the GitHub repository `jeon-jihyeon/meltify`.
+
+The plugin launcher picks the first meltify it finds, in this order:
+
+1. A source checkout that holds the launcher, run through `uv run`
+2. The venv `meltify doctor --install` created in the data directory, when it holds the launcher's version
+3. A `meltify` on `PATH` that reports the launcher's version
+4. `uvx` with `meltify==VERSION` from PyPI
+
+Three environment variables change that:
+
+| Variable | Effect |
+|---|---|
+| `MELTIFY_FROM_GIT=1` | step 4 fetches the `vVERSION` tag from the GitHub repository instead of PyPI |
+| `MELTIFY_EXTRAS=office,archive` | step 4 installs those extras too, as `meltify[office,archive]` |
+| `MELTIFY_ALLOW_PATH=1` | step 3 accepts a `meltify` on `PATH` of any version, so you're trusting whatever that is |
 
 ## Keys
 

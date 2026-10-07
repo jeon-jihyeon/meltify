@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from meltify import __version__
+from meltify.config import pick
 from meltify.evidence import USAGE, Envelope, Src, finding
 
 NAME = "check"
@@ -238,12 +239,12 @@ def _cli_rule(args: argparse.Namespace, path: str) -> Rule:
 
 def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
     env = Envelope(command=NAME, version=__version__)
-    conf = settings.get("check", {})
+    conf = settings["check"]
     if (args.file is None) == (args.text is None):
         env.error(USAGE, "give exactly one of FILE or --text")
         return env
 
-    hygiene_on = conf.get("hygiene", True) and not args.no_hygiene
+    hygiene_on = conf["hygiene"] and not args.no_hygiene
     if args.field and not _has_text_rule(args):
         env.error(USAGE, "--field needs a text rule, like --pattern or --upper")
         return env
@@ -285,13 +286,13 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
         checker = Checker(source="<text>", rules=rules, check_hygiene=hygiene_on)
         data: Any = args.text
     else:
-        schema_path = args.schema or (Path(conf["schema"]) if conf.get("schema") else None)
+        schema_path = args.schema or (Path(conf["schema"]) if conf["schema"] else None)
         checker = Checker(
             source=str(args.file),
             rules=rules,
             schema=json.loads(schema_path.read_text("utf-8")) if schema_path else None,
-            count=args.count if args.count is not None else conf.get("count"),
-            unique=args.unique or list(conf.get("unique", [])),
+            count=pick(args.count, conf.get("count")),
+            unique=pick(args.unique, list(conf["unique"])),
             check_hygiene=hygiene_on,
         )
         env.inputs.append({"path": str(args.file)})

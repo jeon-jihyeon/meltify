@@ -46,7 +46,7 @@ def gunzip(data: bytes) -> bytes | None:
 class Embeds:
     """Pictures, charts and diagrams found inside a document, and the ones it can't read
 
-    Every picture goes through `admit`, so one document's pictures share MAX_PICTURE_BYTES
+    Every picture goes through `hold`, so one document's pictures share MAX_PICTURE_BYTES
     and identical bytes are held once, however many places show them. Zip-based converters
     read members through `load`, which also reads each member once
     """

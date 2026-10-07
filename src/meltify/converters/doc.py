@@ -44,7 +44,7 @@ SOFFICE_TIMEOUT = 180
 # MS-DOC FibRgFcLcb97 entries, by their place among the fc and lcb pairs
 FIB_CHPX, FIB_CLX, FIB_SPA, FIB_DGG = 12, 33, 40, 50
 FIB_ENCRYPTED, FIB_TABLE = 0x0100, 0x0200
-WORD97 = 0xC0  # lowest nFib Word 97 writers use, Word 95 and older lay the FIB out differently
+WORD97 = 0xC0  # lowest nFib Word 97 writers use. Word 95 and older lay the FIB out differently
 PIC_LOCATION = 0x6A03  # sprmCPicLocation, the picture's offset in the Data stream
 OLE_OBJECT = 0x080A  # sprmCFOle2, where the location names an object storage instead
 FIELD_DATA = 0x0806  # sprmCFData, form field data rather than a picture
@@ -303,7 +303,7 @@ def _bstore(doc: bytes, table: bytes, fc: int, lcb: int, blips: Blips) -> list[P
 
 
 def _shapes(table: bytes, fc: int, lcb: int) -> dict[int, list[int]]:
-    """Store indexes each top level shape shows, by the shape id its anchor names
+    """Store indexes each top-level shape shows, by the shape id its anchor names
 
     A group's anchor names the group, so the pictures inside it count for the group
     """

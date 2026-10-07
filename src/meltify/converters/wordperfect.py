@@ -28,7 +28,7 @@ WALKED = (
     "footers and footnotes are left out ({hint})"
 )
 
-# Lengths of the fixed length function groups, from libwpd's WP5 and WP6 file structures
+# Lengths of the fixed-length function groups, from libwpd's WP5 and WP6 file structures
 WP5_FIXED = (4, 9, 11, 3, 3, 5, 6, 7, 4, 5, 6, 6, 8, 10, 10, 12)  # 0xC0 to 0xCF
 WP6_FIXED = (4, 5, 3, 3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 8, 8)  # 0xF0 to 0xFE
 # WP6 stores common accented letters as single bytes 0x01 to 0x20
@@ -103,7 +103,7 @@ class _Walk:
         self.out.append(found)
 
     def fixed(self, at: int, size: int) -> bool:
-        """Whether a fixed length group ends with its own code, as libwpd checks"""
+        """Whether a fixed-length group ends with its own code, as libwpd checks"""
         return at + size <= len(self.data) and self.data[at + size - 1] == self.data[at]
 
     def wp5(self, at: int) -> None:
@@ -198,8 +198,8 @@ def walk(data: bytes) -> tuple[str, int]:
 
 
 def _wpd2text(tool: str, path: Path) -> str:
-    # Bytes in, since its UTF-8 output shouldn't depend on the locale this runs under
-    # An absolute path, so a file named like an option can't become one
+    # Bytes in, since its UTF-8 output shouldn't depend on the locale this runs under. An
+    # absolute path, so a file named like an option can't become one
     proc = safe.run([tool, str(path.resolve())], timeout=TIMEOUT, check=False, text=False)
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-1:]

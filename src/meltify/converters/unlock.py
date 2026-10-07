@@ -202,8 +202,9 @@ def _office_encrypted(path: Path) -> bool:
 
 
 def _encrypted(compound: Any) -> bool:
-    """Whether an OLE file holds an encrypted Office document, read from the markers the
-    formats set without needing msoffcrypto
+    """Whether an OLE file holds an encrypted Office document
+
+    Each format sets its own marker, so this works without msoffcrypto:
 
     1. Agile and standard encryption wrap the package in EncryptionInfo and EncryptedPackage
     2. Word sets fEncrypted in the FIB at the start of the WordDocument stream

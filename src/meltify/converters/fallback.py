@@ -1,22 +1,20 @@
 """Last resort for binary files no converter reads: render them, then read the pixels
 
-Files reach this from the unknown entry, or from a native converter whose parser gave up,
-since rendering loses structure and OCR guesses at text the file already holds. The order
+Rendering loses structure and OCR guesses at text the file already holds, so files only
+land here from the unknown entry or from a native converter whose parser gave up. The order
 is LibreOffice, a full Quick Look preview, the text Spotlight indexes, and Quick Look's
 first-page thumbnail
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
-from meltify import safe
+from meltify import ffmpeg, safe
 from meltify.converters import Block, Converted, RecognizeJob, run
 from meltify.evidence import Src
 from meltify.needs import LIBREOFFICE, error_note
@@ -37,7 +35,6 @@ SOFFICE = NATIVE | {
 }  # fmt: skip
 # Formats textutil reads. It treats anything else as plain text
 TEXTUTIL = {".doc", ".dot", ".docx", ".rtf", ".odt", ".wordml", ".webarchive"}
-PROBE_TIMEOUT = 20
 SPOTLIGHT_TIMEOUT = 30
 PREVIEW_SIDE = 2000
 # Share of control and replacement characters real text can carry before it reads as
@@ -64,25 +61,6 @@ MEDIA_MAGIC = (
 ISO_BOXES = {b"ftyp", b"moov", b"mdat", b"free", b"wide", b"skip", b"pnot"}
 
 
-def _rendered(path: Path, src: Src, draw: Callable[[Path, Path], Path | None]) -> Converted | None:
-    from meltify.converters import pdf
-
-    tmp = run.workdir("meltify-render-")
-    out = None
-    try:
-        rendered = draw(path, tmp)
-        if rendered is not None:
-            # pdf cites through the src it's given, so pages cite as `a.wpd#p2`
-            with run.LOCK:
-                out = pdf.convert(rendered, src)
-            out.kind = "rendered"
-        return out
-    finally:
-        # The OCR stage opens the rendered PDF for image-only pages, so then it has to stay
-        if out is None or not any(j.path is not None for j in out.jobs):
-            shutil.rmtree(tmp, ignore_errors=True)
-
-
 def _picture(path: Path) -> bool:
     """Pillow decodes it, so the raster converter can read it like any listed image"""
     from PIL import Image, UnidentifiedImageError
@@ -101,34 +79,6 @@ def _picture(path: Path) -> bool:
         # Pillow's plugins report a file they can't decode in any of these
         return False
     return True
-
-
-def _media(path: Path) -> str | None:
-    """Audio or video when ffprobe finds a timed stream
-
-    ffprobe opens single pictures too, through its image demuxers, and ffmpeg may still have
-    no decoder for them, so those don't count however short a duration they report
-    """
-    probe = shutil.which("ffprobe")
-    if probe is None:
-        return None
-    try:
-        proc = safe.run(
-            [probe, "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type",
-             "-of", "json", "-i", str(path.resolve())],
-            timeout=PROBE_TIMEOUT, check=False,
-        )  # fmt: skip
-        info = json.loads(proc.stdout or "{}")
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        return None
-    found = info.get("format", {})
-    demuxer = found.get("format_name") or ""
-    if proc.returncode != 0 or demuxer == "image2" or demuxer.endswith("_pipe"):
-        return None
-    if not float(found.get("duration") or 0):
-        return None
-    types = {s.get("codec_type") for s in info.get("streams", [])}
-    return "video" if "video" in types else "audio" if "audio" in types else None
 
 
 def _thumbnail(path: Path, src: Src) -> Converted | None:
@@ -254,7 +204,7 @@ def _media_like(head: bytes) -> bool:
     """Magic numbers of the containers and streams ffprobe could find timed media in"""
     if head.startswith(MEDIA_MAGIC) or head[4:8] in ISO_BOXES:
         return True
-    # MPEG audio and ADTS AAC frames start with an 11 bit sync word
+    # MPEG audio and ADTS AAC frames start with an 11-bit sync word
     if len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0:
         return True
     # MPEG transport streams repeat their sync byte every 188 bytes
@@ -279,7 +229,9 @@ def convert(path: Path, src: Src, need: str = NEED) -> Converted:
     if suffix in SOFFICE:
         try:
             # LibreOffice, then Quick Look when that misses
-            out = _rendered(path, src, lambda p, d: render.to_pdf(p, out_dir=d))
+            out = render.read_rendered(
+                path, src, lambda p, d: render.to_pdf(p, out_dir=d), "rendered"
+            )
         except (OSError, RuntimeError, subprocess.SubprocessError) as e:
             # A crashed or hung soffice leaves the cheaper readers below still worth a try
             out = None
@@ -290,12 +242,12 @@ def convert(path: Path, src: Src, need: str = NEED) -> Converted:
         from meltify.converters import raster
 
         out = raster.convert(path, src)
-    elif _media_like(head) and (kind := _media(path)) is not None:
+    elif _media_like(head) and (kind := ffmpeg.media_kind(path)) is not None:
         out = Converted("media", jobs=[RecognizeJob(kind, src, path=path)])
     else:
         out = None
         if suffix not in SOFFICE:
-            out = _rendered(path, src, render.preview)
+            out = render.read_rendered(path, src, render.preview, "rendered")
         out = out or _spotlight(path, src) or _thumbnail(path, src)
     if out is None:
         missing = suffix in SOFFICE and not failed and render.soffice() is None

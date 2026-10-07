@@ -116,16 +116,12 @@ class Api:
 
 
 def engines(settings: dict[str, Any]) -> dict[str, Engine]:
-    conf = settings.get("asr", {})
-    llm_conf = settings.get("llm", {})
+    conf = settings["asr"]
+    llm_conf = settings["llm"]
     return {
-        "mlx": Mlx(conf.get("model", "")),
-        "whispercpp": WhisperCpp(conf.get("whispercpp_model", "")),
-        "api": Api(
-            conf.get("api_model", "whisper-1"),
-            llm_conf.get("openai_key_env", "OPENAI_API_KEY"),
-            llm_conf.get("openai_base_url", "https://api.openai.com/v1"),
-        ),
+        "mlx": Mlx(conf["model"]),
+        "whispercpp": WhisperCpp(conf["whispercpp_model"]),
+        "api": Api(conf["api_model"], llm_conf["openai_key_env"], llm_conf["openai_base_url"]),
     }
 
 
