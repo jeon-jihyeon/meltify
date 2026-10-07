@@ -20,7 +20,7 @@ def home(tmp_path):
 def test_defaults_only(tmp_path, home):
     s = config.load(cwd=tmp_path, env=home)
     assert s["lang"] == "ko"
-    assert s["ocr"]["upscale"] == 3
+    assert s["ocr"]["upscale"] == 0
     assert s["_sources"] == ["defaults"]
 
 
@@ -62,7 +62,7 @@ def test_project_search_without_git_reads_only_cwd(tmp_path, home):
         ("MELTIFY_OCR_SHARPEN", "false", "ocr", "sharpen", False),
         ("MELTIFY_MEDIA_FPS", "2", "media", "fps", 2.0),
         ("MELTIFY_MEDIA_SUB_LANGS", "en, ja", "media", "sub_langs", ["en", "ja"]),
-        ("MELTIFY_SUBMIT_MAX_ATTEMPTS", "7", "submit", "max_attempts", 7),
+        ("MELTIFY_READ_JOBS", "7", "read", "jobs", 7),
     ],
 )
 def test_env_values_take_the_default_type(tmp_path, home, name, raw, section, key, want):
@@ -77,8 +77,8 @@ def test_unknown_env_keys_are_ignored(tmp_path, home):
 
 
 def test_explicit_config_path_and_errors(tmp_path, home):
-    p = _write(tmp_path / "custom.toml", "[submit]\ngap = 2.5\n")
-    assert config.load(cwd=tmp_path, env=home, project=p)["submit"]["gap"] == 2.5
+    p = _write(tmp_path / "custom.toml", "[media]\nscene = 0.5\n")
+    assert config.load(cwd=tmp_path, env=home, project=p)["media"]["scene"] == 0.5
     with pytest.raises(config.ConfigError):
         config.load(cwd=tmp_path, env=home, project=tmp_path / "missing.toml")
     bad = _write(tmp_path / "bad.toml", "lang = \n")
@@ -88,7 +88,7 @@ def test_explicit_config_path_and_errors(tmp_path, home):
 
 def test_none_override_keeps_lower_layer(tmp_path, home):
     s = config.load({"ocr": {"upscale": None, "dpi": 150}}, cwd=tmp_path, env=home)
-    assert s["ocr"]["upscale"] == 3
+    assert s["ocr"]["upscale"] == 0
     assert s["ocr"]["dpi"] == 150
 
 
@@ -108,15 +108,10 @@ def test_cli_reports_config_error_as_json(tmp_path, monkeypatch, capsys):
     assert "MELTIFY_OCR_UPSCALE" in out["errors"][0]["message"]
 
 
-def test_env_sets_keys_that_are_unset_by_default(tmp_path):
-    settings = config.load(cwd=tmp_path, env={"MELTIFY_CHECK_COUNT": "3"})
-    assert settings["check"]["count"] == 3
-
-
 def test_a_misspelled_setting_warns_instead_of_vanishing(tmp_path, home, monkeypatch, capsys):
     project = _write(
         tmp_path / "meltify.toml",
-        "jobz = 2\n[read]\nbudgett = 5\njobs = 1\n[ocrr]\ndpi = 1\n[check]\ncount = 3\n",
+        "jobz = 2\n[read]\nbudgett = 5\njobs = 1\n[ocrr]\ndpi = 1\n",
     )
     s = config.load(cwd=tmp_path, env=home)
     assert s["_warnings"] == [
@@ -127,6 +122,6 @@ def test_a_misspelled_setting_warns_instead_of_vanishing(tmp_path, home, monkeyp
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", home["XDG_CONFIG_HOME"])
-    assert cli.main(["brief", "board", "--json"]) == 0
+    assert cli.main(["doctor", "--quick", "--json"]) in (0, 3)
     warnings = json.loads(capsys.readouterr().out)["warnings"]
     assert warnings[0] == f"{project}: unknown setting jobz, check the spelling"

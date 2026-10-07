@@ -9,7 +9,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Agents misread blurry digits, miss text a PDF hides, can't watch video, and paraphrase the one condition that mattered. meltify turns documents, spreadsheets, slides, mail, chat exports, archives, web pages, images, video and audio into markdown an agent can quote, puts a citation on every block, and checks answers before they go out.
+Agents misread blurry digits, miss text a PDF hides and can't watch video. meltify turns documents, spreadsheets, slides, mail, chat exports, archives, web pages, images, video and audio into markdown an agent can quote, with a citation on every block. Images are read by several OCR engines that flag where they disagree, PDFs are checked for hidden text, and videos keep their frames beside the transcript.
 
 ## Quickstart
 
@@ -44,7 +44,7 @@ for row in env.results:
     print(row["cite"], row["out"], row["needs"])
 ```
 
-`meltify.read` takes the same flags as the command as keywords and returns the same result envelope that `--json` prints. A string option gets the flag's own type, so `password_file="pw.txt"` arrives as a path and `budget="60"` as a number. For encrypted files, pass `password=`: it outranks `password_file=` and never touches argv. Only the names exported from `meltify` are public. Every other module is internal and can change in any release.
+`meltify.read` takes the same flags as the command as keywords and returns the same result envelope that `--json` prints. A value goes through the flag's own type and checks, so `password_file="pw.txt"` arrives as a path, `pages=2` as the page range `2`, and `fps=0` raises `ValueError` as the command line would refuse it. For encrypted files, pass `password=`: it outranks `password_file=` and never touches argv. Only the names exported from `meltify` are public. Every other module is internal and can change in any release.
 
 The skills call the `meltify` command. If it isn't installed, the plugin launcher runs it through `uvx`, so [uv](https://docs.astral.sh/uv/) is the only thing you need.
 
@@ -80,7 +80,7 @@ The attachment became an item of its own, and every block in its markdown starts
 |---|---|
 | `ok` | `false` when `errors` isn't empty |
 | `results` | one row per item, keyed as below |
-| `errors` | what stopped the run, each with `code` (`usage`, `missing`, `failed`, or `violation` from `check`), `message` and sometimes `hint` |
+| `errors` | what stopped the run, each with `code` (`usage`, `missing` or `failed`), `message` and sometimes `hint` |
 | `warnings` | what didn't stop it, like an item that failed or an engine that's missing |
 | `summary`, `inputs`, `artifacts` | the closing line, what you passed, and files written such as `index.jsonl` |
 | `command`, `version` | the command and the meltify version |
@@ -96,10 +96,19 @@ A `read` row has these keys:
 | `out` | the markdown file written for it |
 | `chars` | how many characters of text it melted into |
 | `needs` | what's still unread and why, like `hidden sheets Old`, `ocr (budget)`, a password or a missing extra |
-| `hidden` | PDF text spans a reader can't see. `meltify hidden` shows where and why |
+| `hidden` | how many PDF spans or SVG texts a reader can't see. `--hidden` lists the PDF ones and why |
 | `error`, `hint` | on a failed item, what went wrong and what to try. An item a fallback read in place of a missing extra carries only the `hint` |
 
-URL rows add `final_url`, `fetched_at`, `sha256` and `etag`. A number two OCR engines read differently gets a row of its own with `type` set to `disputed`, plus the `value` and how many times each engine read it in `counts`.
+URL rows add `final_url`, `fetched_at`, `sha256` and `etag`.
+
+Some rows point at a place inside an item instead of at an item. They carry the item's markdown in `out`, and `kind` says what they are:
+
+| Kind | When | Adds |
+|---|---|---|
+| `disputed` | always, for a number two OCR engines read differently | `value`, how many times each engine read it in `counts`, and both as `text` |
+| `hidden` | with `--hidden`, for each PDF span a reader can't see | `text`, `reasons`, `color`, `background`, `size` and `opacity` |
+| `contrast` | with `--contrast`, for each PDF page | `path` of the page rendered in stretched contrast |
+| `frame` | for each video frame kept | `path` of the JPEG, and `reasons`: `scene` or `interval`, plus the time it repeats with `--keep-duplicates` |
 
 A rerun into the same `--out` folder replaces the last run there. Markdown for an item the previous `index.jsonl` listed and this run didn't name at all is deleted, along with its saved attachments, so grepping the folder finds only this run's output. An item that failed this run keeps its previous markdown, and files you put there yourself stay.
 
@@ -108,15 +117,19 @@ A rerun into the same `--out` folder replaces the last run there. Markdown for a
 | Command | Input | Output |
 |---|---|---|
 | `read` | files, folders and URLs of mixed formats | one cited markdown file per item, with images, scans and recordings read by local engines, plus a list of what still needs work |
-| `ocr` | images and scanned PDF pages | each engine's lines with positions, and the values the engines disagree on |
-| `hidden` | PDFs | text a reader doesn't see and why, with page and position |
-| `media` | video, audio or a video URL | timestamped full-resolution frames and a timestamped transcript |
-| `submit` | candidate files and a scoring endpoint | rate-limited submissions that skip duplicates and keep the best score |
-| `check` | an answer file or a string | violations of a schema, counts, unique keys and text rules |
-| `brief` | a problem statement | every condition line quoted with its line number, plus a board for juggling several problems |
 | `doctor` | nothing | which engines, binaries and keys are available, and how to add the rest |
 
-Each command has a skill of the same name, such as `meltify-ocr`, that tells the agent when to run it and what to do with the result.
+Each command has a matching skill, `meltify-read` and `meltify-doctor`, that tells the agent when to run it and what to do with the result.
+
+`read` also takes a closer look at one image, PDF or video:
+
+| Input | Flags |
+|---|---|
+| Images and scans | `--engines vision,gemini` to pick the engines, `--reading NAME=FILE` to cross-check a reading of your own, `--ocr-pages` to OCR PDF pages that have a text layer too, `--upscale`, `--equalize`, `--no-sharpen`, and `--compare tokens` to compare words as well as numbers |
+| PDFs | `--hidden` for a row per hidden span, `--contrast` for pages rendered in stretched contrast, `--pages 1,3-5` |
+| Recordings and videos | `--start` and `--end` in seconds, `--fps` for interval frames, `--scene`, `--keep-duplicates`, `--frames N`, and `--subs-only` for captions alone |
+
+`meltify ocr`, `hidden` and `media` from 0.2 still run as `read` with a warning, and are removed in 0.4.0.
 
 ## What `read` handles
 
@@ -161,12 +174,13 @@ A few more things to know about that pass:
 - `--shallow` skips OCR, speech, and drawing or recalculation work, and lists what it skipped in `needs`. Native text melts as usual
 - When two OCR engines disagree on a number, the block ends with a `> disputed` line. With only one engine, it ends with `> unchecked: one engine`
 - When the engines read every picture and recording of an item and find no text at all, its row says `no text found`, so a blank scan isn't mistaken for one nobody read
+- A recording with a `.vtt` or `.srt` file of the same name beside it takes its transcript from that file instead of a speech engine
 
 Encrypted files open with a password from `--password-file PATH` or `MELTIFY_PASSWORD`: PDF, Word, Excel and PowerPoint, HWP and HWPX, Pages, Keynote and Numbers, and zip, 7z and rar archives. HWP distribution documents, which only restrict copying and printing, open without one. `--password` works too, but other users on the machine can see it. If you set more than one, `--password-file` wins, then `--password`, then `MELTIFY_PASSWORD`.
 
 Without a password, the row says `encrypted` in `needs` and no markdown file is written. A wrong one says `wrong password`. An archive still lists the members it could open.
 
-URLs work like files. `read` saves a web page's main text with its heading anchors (`--whole` keeps the full page, `--render` runs it in a headless browser first), downloads documents and melts them by type, and sends video links through the `media` pipeline. Downloads land under `meltify-out/read/web/` and are revalidated with ETags on the next run. By default it refuses private addresses, follows `robots.txt` and stops at 20 MB or 30 seconds. See [SECURITY.md](SECURITY.md) for the details.
+URLs work like files. `read` saves a web page's main text with its heading anchors (`--whole` keeps the full page, `--render` runs it in a headless browser first), downloads documents and melts them by type, and downloads videos with their subtitles through yt-dlp. Downloads land under `meltify-out/read/web/` and are revalidated with ETags on the next run. By default it refuses private addresses, follows `robots.txt` and stops at 20 MB or 30 seconds. See [SECURITY.md](SECURITY.md) for the details.
 
 ## Citations
 
@@ -189,14 +203,13 @@ Every result carries `src` and a one-line `cite`:
 | Web page line | `https://example.com/guide#install:28` |
 | Text line | `notes.txt:42` |
 | Media span | `call.m4a@00:01:23.4-00:01:27.0` |
-| JSON value | `answers.json#$[3].reason` |
 
 ## Exit codes
 
 Every command prints a table by default, and the full result with `--json`. It exits with:
 
 - `0`: success
-- `1`: violations, failed checks or other errors
+- `1`: a failure inside the command
 - `2`: usage error or bad input
 - `3`: a needed engine, key, binary or base module is missing
 
@@ -209,9 +222,9 @@ An item `read` couldn't melt doesn't change the exit code. It shows up as a row 
 | OCR | Apple Vision on macOS, PaddleOCR | Gemini, Claude, any OpenAI-compatible endpoint |
 | Speech | MLX Whisper on Apple Silicon, whisper.cpp | any OpenAI-compatible transcription endpoint |
 
-`auto` uses local engines only. Paid engines run only when you name them in `meltify.toml` or on the command line. An agent can also feed in what it reads in an image with `meltify ocr --reading agent=FILE`, so its own reading gets cross-checked against the local engines without any API key.
+`auto` uses local engines only. Paid engines run only when you name them in `meltify.toml` or on the command line. An agent can also feed in what it reads in an image with `meltify read IMAGE --reading agent=FILE`, so its own reading gets cross-checked against the local engines without any API key.
 
-Optional parts install on request with `meltify doctor --install NAME`. Under the plugin launcher, it installs into the launcher's own venv. Anywhere else it installs nothing and prints the command for your setup, like `uv tool install 'meltify[office]'` or `pip install 'meltify[office]'`. With `uvx`, use `uvx --from 'meltify[office]' meltify ...`. The extras:
+Optional parts install on request with `meltify doctor --install NAME`. Under the plugin launcher, it installs into the launcher's own venv. Anywhere else it installs no Python packages and prints the command for your setup, like `uv tool install 'meltify[office]'` or `pip install 'meltify[office]'`. With `uvx`, use `uvx --from 'meltify[office]' meltify ...`. The extras:
 
 | Extra | Unlocks |
 |---|---|
@@ -240,14 +253,14 @@ Settings are layered, lowest precedence first:
 
 See [examples/meltify.toml](examples/meltify.toml) for a sample. A key no default names, like a typo, shows up as a warning instead of being ignored. A few keys worth knowing:
 
-- `lang` is the language OCR expects (`ko` by default). `--lang` on `read` and `ocr` sets it for one run, and takes `ko`, `en`, `ja`, `zh`, `de`, `fr` or `es`
+- `lang` is the language OCR expects (`ko` by default). `--lang` sets it for one run, and takes `ko`, `en`, `ja`, `zh`, `de`, `fr` or `es`
 - `asr.lang` is the spoken language for speech engines. It's `auto` by default, separate from `lang`, so Whisper detects each recording's language instead of translating it
 - `read.parquet_rows` sets how many Parquet rows melt per file
 - `render.quicklook = false` keeps Quick Look and Spotlight out of every render
 
 ## Limits
 
-- Text drawn inside an image is just pixels, so `hidden` finds it only through `--contrast` rendering and OCR
+- Text drawn inside an image is just pixels, so `--hidden` can't list it. `--contrast` saves page renders where it stands out, for you or an agent to look at
 - OCR agreement means the engines read the same value, not that the value is right. A value read only by LLM engines is never marked agreed
 - Speech recognition and OCR quality depend on the engine and the input
 - Linux has no Apple Vision, so with PaddleOCR alone every reading is marked `unchecked`

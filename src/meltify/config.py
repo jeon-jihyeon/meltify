@@ -63,13 +63,6 @@ def _merge(base: dict[str, Any], top: Mapping[str, Any]) -> None:
             base[k] = copy.deepcopy(v)
 
 
-# Keys left out of the defaults, so "not set" and 0 stay different.
-# The sample value only tells the env layer what type to parse
-UNSET_TYPES: dict[str, dict[str, Any]] = {"check": {"count": 0}}
-# Keys only a config file can set, like the [[check.field]] tables, so the env layer skips them
-FILE_ONLY: dict[str, set[str]] = {"check": {"field"}}
-
-
 def _unknown(layer: Mapping[str, Any], base: Mapping[str, Any], path: Path) -> list[str]:
     """A warning per key in `layer` that no default names, since a typo would be ignored"""
     found = []
@@ -78,8 +71,7 @@ def _unknown(layer: Mapping[str, Any], base: Mapping[str, Any], path: Path) -> l
         if known is None:
             found.append(key)
         elif isinstance(known, dict) and isinstance(value, Mapping):
-            fields = {*known, *UNSET_TYPES.get(key, {}), *FILE_ONLY.get(key, ())}
-            found += [f"{key}.{field}" for field in value if field not in fields]
+            found += [f"{key}.{field}" for field in value if field not in known]
     return [f"{path}: unknown setting {name}, check the spelling" for name in found]
 
 
@@ -112,8 +104,7 @@ def _from_env(base: dict[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
             if not isinstance(values, dict) or not key.startswith(section + "_"):
                 continue
             field = key[len(section) + 1 :]
-            like = values.get(field, UNSET_TYPES.get(section, {}).get(field))
-            if like is not None:
+            if (like := values.get(field)) is not None:
                 out.setdefault(section, {})[field] = _coerce(name, raw, like)
     return out
 

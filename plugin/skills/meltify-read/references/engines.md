@@ -7,7 +7,7 @@
 | `gemini` | paid API | per tile | Needs `GEMINI_API_KEY` |
 | `claude` | paid API | per tile | Needs `ANTHROPIC_API_KEY` |
 | `openai` | paid API | per tile | Any OpenAI-compatible endpoint through `llm.openai_base_url`. Needs `OPENAI_API_KEY` |
-| `--reading NAME=FILE` | none | none | Lines read elsewhere, such as by an agent viewing the prepared image |
+| `--reading NAME=FILE` | none | none | Lines read elsewhere, such as by an agent viewing the image itself |
 
 - `auto` picks the installed local engines and never a paid one
 - For LLM engines, large images are cut into overlapping tiles of at most `ocr.tile_max` px, because vision APIs shrink anything bigger
@@ -18,7 +18,8 @@ lang = "ko"
 
 [ocr]
 engines = "vision,gemini"
-upscale = 3
+# 0 sizes each picture on its own
+upscale = 0
 dpi = 300
 
 [llm]

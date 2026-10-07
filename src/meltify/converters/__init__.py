@@ -17,7 +17,7 @@ import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from meltify.evidence import Src
 from meltify.files import RAR_MAGIC, SEVEN_ZIP_MAGIC
@@ -98,6 +98,8 @@ class RecognizeJob:
     data: bytes | None = None  # image bytes pulled out of a container
     # Where an embedded image is drawn on its PDF page in points, so pixel boxes map back
     rect: tuple[float, float, float, float] | None = None
+    # False once subtitles gave a recording's transcript, so only its frames are read
+    listen: bool = True
 
     def __post_init__(self) -> None:
         if (self.path is None) == (self.data is None):
@@ -133,6 +135,14 @@ class Converted:
     children: list[Child] = field(default_factory=list)
     jobs: list[RecognizeJob] = field(default_factory=list)
     hidden: int = 0
+    # Whether the converter looks for hidden text at all, so read --hidden can say what it
+    # couldn't check
+    hidden_checked: bool = False
+    # A result row per hidden span, when read --hidden asks for them
+    spans: list[dict[str, Any]] = field(default_factory=list)
+    # Page renders to keep beside the markdown, each with the place it shows. read moves
+    # each file out and removes the folder that held it
+    renders: list[tuple[Src, Path]] = field(default_factory=list)
 
     @property
     def chars(self) -> int:
@@ -291,11 +301,18 @@ def pick(path: Path) -> tuple[str, Converter]:
 
 
 def audio(path: Path, src: Src) -> Converted:
-    return Converted("media", jobs=[RecognizeJob("audio", src, path=path)])
+    return recording("audio", path, src)
 
 
 def video(path: Path, src: Src) -> Converted:
-    return Converted("media", jobs=[RecognizeJob("video", src, path=path)])
+    return recording("video", path, src)
+
+
+def recording(kind: Literal["audio", "video"], path: Path, src: Src) -> Converted:
+    """A recording, its transcript taken from subtitle files beside it when it has some"""
+    from meltify import video
+
+    return video.recording(kind, src, path, video.sidecars(path))
 
 
 def _magic(*prefixes: bytes) -> Sniff:

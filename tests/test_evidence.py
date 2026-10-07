@@ -94,7 +94,7 @@ def test_finding_carries_src_and_cite():
 def test_envelope_exit_codes():
     env = Envelope("x", "0.1.0")
     assert env.ok and env.exit_code == 0
-    env.error("violation", "bad")
+    env.error("failed", "bad")
     assert not env.ok and env.exit_code == 1
     env.error(MISSING, "no ffmpeg", "brew install ffmpeg")
     assert env.exit_code == 3

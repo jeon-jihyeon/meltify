@@ -240,6 +240,7 @@ def read_rendered(
     the lock, so a slow renderer doesn't hold up other PDFs
     """
     from meltify.converters import pdf
+    from meltify.converters.run import PdfLook
 
     folder = workdir(prefix)
     out = None
@@ -247,7 +248,8 @@ def read_rendered(
         rendered = draw(path, folder)
         if rendered is not None:
             with LOCK:
-                out = pdf.convert(rendered, src)
+                # Defaults, since the run's PDF flags speak of the user's own PDFs
+                out = pdf.melt(rendered, src, PdfLook())
             out.kind = kind
         return out
     finally:

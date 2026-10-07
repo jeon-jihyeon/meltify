@@ -8,7 +8,7 @@
     {
       "name": "meltify",
       "source": "./plugin",
-      "description": "Melt images, PDFs, office files, mail, video and audio into prompt-ready text with a citation on every block, and check answers before they go out."
+      "description": "Melt images, PDFs, office files, mail, video and audio into prompt-ready text with a citation on every block."
     }
   ]
 }

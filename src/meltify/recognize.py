@@ -14,11 +14,12 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -29,8 +30,9 @@ from meltify.config import pick
 from meltify.converters import Block, RecognizeJob
 from meltify.engines.asr import Segment
 from meltify.engines.consensus import EngineReading, compare, disputed_row, tally
-from meltify.engines.ocr import TextBox
-from meltify.evidence import Src, clock, coordinate
+from meltify.engines.ocr import Reading, TextBox
+from meltify.evidence import Src, clock, coordinate, finding, span
+from meltify.ffmpeg import Window
 from meltify.files import safe_name
 from meltify.needs import ITEM_NOTE
 from meltify.safe import MissingTool, attempt
@@ -59,10 +61,21 @@ class Options:
     frames: int = 20
     refresh: bool = False
     dpi: int = 300
+    # Resize factor for pictures, None to size each one toward SHORT_TARGET on its own
+    upscale: float | None = None
     sharpen: bool = True
+    equalize: bool = False
     tile_max: int = 2576
+    # What engines are compared on: numbers or tokens
+    compare: str = "numbers"
+    # Lines read elsewhere, compared as one more engine on the run's single picture
+    readings: tuple[Reading, ...] = ()
     scene: float = 0.3
+    # Interval frames per second on top of scene changes, 0 for none
+    fps: float = 0.0
     dedup_distance: int = 4
+    keep_duplicates: bool = False
+    window: Window = field(default_factory=Window)
 
     @classmethod
     def from_settings(
@@ -74,9 +87,19 @@ class Options:
         budget: float | None = None,
         frames: int | None = None,
         refresh: bool = False,
+        upscale: float | None = None,
+        no_sharpen: bool = False,
+        equalize: bool = False,
+        compare: str = "numbers",
+        readings: tuple[Reading, ...] = (),
+        scene: float | None = None,
+        fps: float | None = None,
+        keep_duplicates: bool = False,
+        window: Window | None = None,
     ) -> Options:
         """Options from the merged settings, where a flag left as None takes the setting"""
         read, ocr, media = settings["read"], settings["ocr"], settings["media"]
+        factor = pick(upscale, ocr["upscale"])
         return cls(
             engines=str(pick(engines, ocr["engines"])),
             asr=str(pick(asr, settings["asr"]["engine"])),
@@ -86,10 +109,17 @@ class Options:
             frames=int(pick(frames, read["frames"])),
             refresh=refresh,
             dpi=int(ocr["dpi"]),
-            sharpen=bool(ocr["sharpen"]),
+            upscale=float(factor) or None,
+            sharpen=bool(ocr["sharpen"]) and not no_sharpen,
+            equalize=equalize,
             tile_max=int(ocr["tile_max"]),
-            scene=float(media["scene"]),
+            compare=compare,
+            readings=readings,
+            scene=float(pick(scene, media["scene"])),
+            fps=float(pick(fps, media["fps"])),
             dedup_distance=int(media["dedup_distance"]),
+            keep_duplicates=keep_duplicates,
+            window=window or Window(),
         )
 
 
@@ -97,6 +127,10 @@ class Options:
 class Outcome:
     blocks: list[Block] = field(default_factory=list)
     disputed: list[dict[str, Any]] = field(default_factory=list)
+    # A row per video frame looked at, its picture in the cache under `file`
+    frames: list[dict[str, Any]] = field(default_factory=list)
+    # Pictures only one engine read, so nothing in them was cross-checked
+    unchecked: int = 0
     # Why the job is still pending: "budget", "engine" or "failed"
     left: str | None = None
 
@@ -108,9 +142,19 @@ class Picture:
 
 
 @dataclass(frozen=True)
-class Frame:
+class Shot:
+    """A frame taken from a video, before any engine looks at it"""
+
     t: float
     sha: str
+    # scene or interval, then the time of the frame it repeats when duplicates are kept
+    reasons: tuple[str, ...]
+    file: Path
+
+
+@dataclass(frozen=True)
+class Frame:
+    shot: Shot
     picture: Picture | None
 
 
@@ -163,10 +207,6 @@ def _where(src: Src) -> str:
     return f"@{src.unit}(" + ",".join(coordinate(v) for v in src.bbox) + ")"
 
 
-def span(start: float, end: float) -> str:
-    return f"@{clock(start)}-{clock(end)}"
-
-
 def _placer(src: Src, unit: str, k: Box) -> Callable[[Box | None], Src]:
     """Maps a box in source px to the job's own space: x0 + x * sx, y0 + y * sy"""
     x0, y0, sx, sy = k
@@ -192,6 +232,9 @@ class Recognizer:
         self.warned: set[str] = set()
         self._warn = warn
         self._ocr: list[Any] | None = None
+        # Set by check_named for engines the command line named, which fail the run when
+        # missing. One named only in a config file leaves its pictures listed instead
+        self._ocr_named = False
         self._asr: Any = None
         self._asr_ready = False
         self._file_sha: dict[Path, str] = {}
@@ -228,7 +271,14 @@ class Recognizer:
         if self._ocr is None:
             from meltify.engines import ocr as engines
 
-            chosen = engines.ready(self.opts.engines, self.settings)
+            try:
+                chosen = engines.ready(self.opts.engines, self.settings)
+            except MissingTool as e:
+                if self._ocr_named:
+                    raise
+                self.warn(f"{e}, so images stay listed as needs: {e.hint}")
+                self._ocr = []
+                return self._ocr
             # Body text comes from the first local engine that read anything, then the rest
             # in the order named
             rank = {n: i for i, n in enumerate(engines.LOCAL_ENGINES)}
@@ -246,6 +296,7 @@ class Recognizer:
         Engines named only in a config file stay lazy, so a run with nothing to OCR still works
         """
         if ocr and self.opts.engines != "auto":
+            self._ocr_named = True
             self.ocr_engines()
         if asr and self.opts.asr != "auto":
             self.asr_engine()
@@ -289,7 +340,7 @@ class Recognizer:
 
     # The run
 
-    def run(self, jobs: list[RecognizeJob], transcribed: Collection[Src] = ()) -> list[Outcome]:
+    def run(self, jobs: list[RecognizeJob]) -> list[Outcome]:
         """Outcomes in job order. Cached content comes first, then the rest within budget"""
         outcomes = [Outcome() for _ in jobs]
         if not jobs:
@@ -299,12 +350,12 @@ class Recognizer:
             for j in jobs
         ):
             self.ocr_engines()
-        if any(j.kind in ("audio", "video") for j in jobs):
+        if any(j.kind in ("audio", "video") and j.listen for j in jobs):
             self.asr_engine()
 
         groups: dict[tuple[str, str, bool], list[int]] = {}
         for i, job in enumerate(jobs):
-            listen = job.kind == "audio" or (job.kind == "video" and job.src not in transcribed)
+            listen = job.kind in ("audio", "video") and job.listen
             kind = "picture" if job.kind in ("image", "page") else job.kind
             groups.setdefault((kind, self.key(job), listen), []).append(i)
 
@@ -356,7 +407,12 @@ class Recognizer:
         where = first.src.cite()
         try:
             if kind == "picture":
-                got: Any = self.picture(sha, lambda: self._load(first), where, first.kind, compute)
+                got: Any = self.picture(
+                    sha, lambda: self._load(first), where, first.kind, compute, self.opts.readings
+                )
+            elif kind == "audio" and not listen:
+                # Its subtitles already gave the transcript
+                return True
             elif kind == "audio":
                 got = self.speech(sha, first.path, where, compute)
             else:
@@ -401,19 +457,28 @@ class Recognizer:
     def _prep(self, page: bool) -> str:
         from meltify import imaging
 
-        sharp = "s" if self.opts.sharpen else ""
+        tone = ("s" if self.opts.sharpen else "") + ("e" if self.opts.equalize else "")
         if page:
-            return f"dpi{self.opts.dpi}{sharp}"
-        return f"auto{imaging.SHORT_TARGET}-{imaging.LONG_MAX}{sharp}"
+            return f"dpi{self.opts.dpi}{tone}"
+        if self.opts.upscale is not None:
+            return f"x{self.opts.upscale:g}{tone}"
+        return f"auto{imaging.SHORT_TARGET}-{imaging.LONG_MAX}{tone}"
 
     def picture(
-        self, sha: str, load: Callable[[], Any], where: str, kind: str, compute: bool
+        self,
+        sha: str,
+        load: Callable[[], Any],
+        where: str,
+        kind: str,
+        compute: bool,
+        given: tuple[Reading, ...] = (),
     ) -> Picture | None:
+        """Every engine's lines for one picture, then the `given` readings, uncached"""
         from meltify import imaging
         from meltify.engines import ocr as engines
 
         chosen = self.ocr_engines()
-        if not chosen:
+        if not chosen and not given:
             raise MissingTool("ocr engine", f"{engines.INSTALL_HINT}, or --engines NAME")
         lang, prep = self.opts.lang, self._prep(kind == "page")
         size: tuple[int, int] | None = None
@@ -436,8 +501,10 @@ class Recognizer:
                 return Picture(size or (0, 0), list(readings.values()))
             image = loaded.value
             size = (image.width, image.height)
-            factor = 1.0 if kind == "page" else imaging.auto_factor(*size)
+            factor = 1.0 if kind == "page" else self.opts.upscale or imaging.auto_factor(*size)
             prepared = imaging.upscale(image, factor, self.opts.sharpen)
+            if self.opts.equalize:
+                prepared = imaging.equalize(prepared)
             # A folder per read, since a frame and a picture can share content and workers
             work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
             prep_path = imaging.save(prepared, work / "prepared.png")
@@ -465,14 +532,21 @@ class Recognizer:
                     prep,
                 )
                 readings[e.name] = EngineReading(e.name, e.kind, boxes)
-        assert size is not None
-        return Picture(size, [readings[e.name] for e in chosen if e.name in readings])
+        found = [readings[e.name] for e in chosen if e.name in readings]
+        found += [EngineReading(r.name, r.kind, r.recognize(Path(), (0, 0))) for r in given]
+        return Picture(size or (0, 0), found)
 
     # Sound
 
     def _asr_prep(self, engine: Any) -> str:
         model = str(getattr(engine, "model", "") or "default")
-        return Path(model).name[-MODEL_TAIL:]
+        return Path(model).name[-MODEL_TAIL:] + self._window_tag()
+
+    def _window_tag(self) -> str:
+        w = self.opts.window
+        if w.start is None and w.end is None:
+            return ""
+        return f"-w{w.start or 0:g}-{'end' if w.end is None else f'{w.end:g}'}"
 
     def speech(
         self, sha: str, path: Path | None, where: str, compute: bool
@@ -491,13 +565,18 @@ class Recognizer:
         segments: list[Segment] = []
         if ffmpeg.has_audio(path):
             work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
-            wav = ffmpeg.audio(path, work / "audio.wav", ffmpeg.Window())
+            window = self.opts.window
+            wav = ffmpeg.audio(path, work / "audio.wav", window)
             with self._one_at_a_time(engine):
                 got = attempt(engine.transcribe, wav, self.opts.asr_lang)
             if not got.ok:
                 self.warn(f"{engine.name} failed on {where}: {got.error}")
                 return []
-            segments = got.value
+            # Cut audio starts at zero, so the window start puts times back on the recording
+            segments = [
+                Segment(s.start + window.offset(), s.end + window.offset(), s.text)
+                for s in got.value
+            ]
         self.cache.put({"segments": [[s.start, s.end, s.text] for s in segments]}, *key)
         return segments
 
@@ -512,44 +591,118 @@ class Recognizer:
         elif listen and (speech := self.speech(sha, path, where, compute)) is None:
             return None
         look = self.opts.frames > 0 and bool(self.ocr_engines())
-        key = ("scene", sha, "ffmpeg", "any", f"t{self.opts.scene}-n{self.opts.frames}")
-        if (listed := self.cache.get(*key)) is not None:
+        o = self.opts
+        key = (
+            "scene",
+            sha,
+            "ffmpeg",
+            "any",
+            # r2: listings hold each frame's reasons and the total before the cap
+            f"r2-t{o.scene}-n{o.frames}-f{o.fps:g}-k{int(o.keep_duplicates)}"
+            f"-d{o.dedup_distance}{self._window_tag()}",
+        )
+        listed = self.cache.get(*key)
+        if listed is not None:
+            shots = [Shot(t, h, tuple(r), self.frame_file(h)) for t, h, r in listed["frames"]]
             frames = [
-                Frame(t, s, self.picture(s, _unused, where, "image", False) if look else None)
-                for t, s in listed["frames"]
+                Frame(
+                    shot, self.picture(shot.sha, _unused, where, "image", False) if look else None
+                )
+                for shot in shots
             ]
-            if not look or all(f.picture is not None for f in frames):
+            # A frame picture cleared from the cache means a fresh pass over the video
+            if all(sh.file.is_file() for sh in shots) and (
+                not look or all(f.picture is not None for f in frames)
+            ):
+                self._capped(where, len(frames), listed["total"])
                 return Footage(speech, listed["scenes"], frames)
         if not compute:
             return None
-        scenes, shots = self._shots(path)
-        self.cache.put({"scenes": scenes, "frames": [[t, s] for t, s, _ in shots]}, *key)
+        scenes, shots, total = self._shots(path)
+        shots = [replace(sh, file=self._store_frame(sh.sha, sh.file)) for sh in shots]
+        listing = [[sh.t, sh.sha, list(sh.reasons)] for sh in shots]
+        self.cache.put({"scenes": scenes, "frames": listing, "total": total}, *key)
+        self._capped(where, len(shots), total)
         frames = []
-        for t, s, file in shots:
+        for sh in shots:
             pic = None
             if look:
                 pic = self.picture(
-                    s, lambda f=file: _open_flat(f), f"{where}{span(t, t)}", "image", True
+                    sh.sha,
+                    lambda f=sh.file: _open_flat(f),
+                    f"{where}{span(sh.t, sh.t)}",
+                    "image",
+                    True,
                 )
-            frames.append(Frame(t, s, pic))
+            frames.append(Frame(sh, pic))
         return Footage(speech, scenes, frames)
 
-    def _shots(self, path: Path) -> tuple[list[float], list[tuple[float, str, Path]]]:
-        """Scene times, and up to `frames` distinct frames spread across them"""
+    def _capped(self, where: str, kept: int, total: int) -> None:
+        if 0 < kept < total:
+            self.warn(f"{where}: kept {kept} of {total} frames, raise --frames to keep more")
+
+    def frame_file(self, sha: str) -> Path:
+        return self.cache.root / "frame" / sha[:2] / f"{sha}.jpg"
+
+    def _store_frame(self, sha: str, file: Path) -> Path:
+        """The frame's picture kept in the cache by content, so a cached run still has it"""
+        target = self.frame_file(sha)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.is_file():
+                # Unique per thread and swapped in whole, since two videos can share a frame
+                # and a reader must never see half a JPEG
+                tmp = target.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+                shutil.copyfile(file, tmp)
+                os.replace(tmp, target)
+            return target
+        except OSError:
+            # A read-only cache keeps the picture where the run removes it after the
+            # markdown is out, since this recognizer's temp folder goes first
+            from meltify.converters import run
+
+            kept = run.workdir("meltify-frames-") / file.name
+            shutil.copyfile(file, kept)
+            return kept
+
+    def _shots(self, path: Path) -> tuple[list[float], list[Shot], int]:
+        """Scene times, the frames to keep, and how many there were before the cap
+
+        Up to `frames` are kept, spread across scene changes and intervals
+        """
         from meltify import ffmpeg, imaging
 
+        o = self.opts
         folder = Path(tempfile.mkdtemp(prefix="frames-", dir=self.tmp))
-        found = dict(ffmpeg.scene_frames(path, folder, self.opts.scene, ffmpeg.Window()))
-        distinct = imaging.distinct_frames(found, self.opts.dedup_distance)
-        kept = [(file, found[file]) for file, _ in distinct]
-        scenes = [t for _, t in kept]
-        n = self.opts.frames
+        taken = [(f, t, "scene") for f, t in ffmpeg.scene_frames(path, folder, o.scene, o.window)]
+        # Interval frames only matter as frames, while scene times also feed the scenes line
+        if o.fps > 0 and o.frames > 0:
+            taken += [
+                (f, t, "interval") for f, t in ffmpeg.interval_frames(path, folder, o.fps, o.window)
+            ]
+        # A scene frame goes before an interval frame of the same moment
+        taken.sort(key=lambda x: (x[1], x[2] != "scene"))
+        when = {f: (t, why) for f, t, why in taken}
+        kept: list[tuple[Path, float, tuple[str, ...]]] = []
+        for f, repeats in imaging.distinct_frames(
+            [f for f, _, _ in taken], o.dedup_distance, o.keep_duplicates
+        ):
+            t, why = when[f]
+            again = () if repeats is None else (f"repeats {clock(when[repeats][0])}",)
+            kept.append((f, t, (why, *again)))
+        fresh = [k for k in kept if len(k[2]) == 1]
+        scenes = [t for _, t, reasons in fresh if reasons == ("scene",)]
+        total, n = len(kept), o.frames
         if n <= 0:
-            return scenes, []
-        if len(kept) > n:
-            step = (len(kept) - 1) / max(1, n - 1)
-            kept = [kept[round(i * step)] for i in range(n)] if n > 1 else kept[:1]
-        return scenes, [(t, hashlib.sha256(f.read_bytes()).hexdigest(), f) for f, t in kept]
+            return scenes, [], total
+        if total > n:
+            # Distinct frames come first, so repeats kept with --keep-duplicates only fill
+            # what's left of the cap instead of crowding out a scene
+            repeats = [k for k in kept if len(k[2]) > 1]
+            kept = _spread(fresh, n) + _spread(repeats, n - min(n, len(fresh)))
+            kept.sort(key=lambda k: k[1])
+        shots = [Shot(t, hashlib.sha256(f.read_bytes()).hexdigest(), r, f) for f, t, r in kept]
+        return scenes, shots, total
 
     # Rendering
 
@@ -585,16 +738,19 @@ class Recognizer:
         if len(pic.readings) == 1:
             lines.append("> unchecked: one engine")
         else:
-            for v in compare(pic.readings, "numbers"):
+            for v in compare(pic.readings, self.opts.compare):
                 if v.agreed:
                     continue
                 lines.append(f"> disputed {v.value}: {tally(v)}")
-                disputed.append(disputed_row(place(v.bbox), v, kind="disputed"))
-        return Outcome([Block(base, "\n".join(lines))], disputed)
+                disputed.append(disputed_row(place(v.bbox), v))
+        return Outcome([Block(base, "\n".join(lines))], disputed, unchecked=len(pic.readings) == 1)
 
     def _speech_outcome(self, src: Src, segments: list[Segment]) -> Outcome:
         lines = [f"{span(s.start, s.end)}| {s.text}" for s in segments if s.text]
-        return Outcome([Block(src, "\n".join(lines))] if lines else [])
+        if not lines:
+            return Outcome()
+        engine = self._asr.name if self._asr is not None else "speech"
+        return Outcome([Block(src, "\n".join([f"> transcribed by {engine}", *lines]))])
 
     def _footage_outcome(self, src: Src, got: Footage) -> Outcome:
         out = self._speech_outcome(src, got.speech or [])
@@ -607,13 +763,29 @@ class Recognizer:
             else:
                 out.blocks.append(Block(src, line))
         for f in got.frames:
+            at = replace(src, t=(f.shot.t, f.shot.t))
+            out.frames.append(
+                finding(at, kind="frame", reasons=list(f.shot.reasons), file=str(f.shot.file))
+            )
             if f.picture is None:
                 continue
-            at = replace(src, t=(f.t, f.t))
             shown = self._picture_outcome(at, f.picture, _placer(at, "px", (0, 0, 1, 1)))
             out.blocks += shown.blocks
             out.disputed += shown.disputed
+            out.unchecked += shown.unchecked
         return out
+
+
+def _spread(items: list[Any], n: int) -> list[Any]:
+    """`n` of `items` spaced evenly from first to last"""
+    if n <= 0:
+        return []
+    if len(items) <= n:
+        return items
+    if n == 1:
+        return items[:1]
+    step = (len(items) - 1) / (n - 1)
+    return [items[round(i * step)] for i in range(n)]
 
 
 def _unused() -> Any:

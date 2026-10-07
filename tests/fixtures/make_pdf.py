@@ -1,4 +1,4 @@
-"""PDFs that hide text in the ways the hidden command must catch"""
+"""PDFs that hide text in the ways read --hidden must catch"""
 
 from __future__ import annotations
 

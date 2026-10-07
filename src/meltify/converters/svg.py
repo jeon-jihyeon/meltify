@@ -97,7 +97,7 @@ def _parse(data: bytes) -> list[_Item]:
 
 
 def convert(path: Path, src: Src) -> Converted:
-    out = Converted("svg")
+    out = Converted("svg", hidden_checked=True)
     loose: list[tuple[int, str]] = []
 
     def flush() -> None:

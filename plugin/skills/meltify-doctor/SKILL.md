@@ -4,7 +4,7 @@ description: Check which meltify engines, binaries and API keys are available on
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.4"
+  version: "0.3.0"
   cli: meltify doctor
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---
@@ -32,7 +32,7 @@ Report what meltify can use on this machine and how to fix what's missing.
 ## Gotchas
 
 - `--probe` spends one small paid request per configured key. Run it only when the user agrees.
-- Exit 3 from doctor means the base install is broken. Exit 3 from any other command means a needed engine, key or binary is missing.
+- Exit 3 from doctor means the base install is broken, or `--install` ran outside the launcher and printed the command to run. Exit 3 from any other command means a needed engine, key or binary is missing.
 
 ## Then
 

@@ -5,7 +5,7 @@ import pytest
 
 from meltify import cli, files
 from meltify.evidence import Envelope
-from meltify.output import append_jsonl, emit, read_jsonl, table
+from meltify.output import append_jsonl, emit, table
 
 
 def test_table_aligns_and_truncates():
@@ -53,8 +53,10 @@ def test_jsonl_roundtrip(tmp_path):
     p = tmp_path / "d/log.jsonl"
     append_jsonl(p, [{"k": "가"}])
     append_jsonl(p, [{"k": 2}])
-    assert read_jsonl(p) == [{"k": "가"}, {"k": 2}]
-    assert read_jsonl(tmp_path / "none.jsonl") == []
+    assert [json.loads(line) for line in p.read_text("utf-8").splitlines()] == [
+        {"k": "가"},
+        {"k": 2},
+    ]
 
 
 def test_iter_files_skips_hidden_and_filters(tmp_path):

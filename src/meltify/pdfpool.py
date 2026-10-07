@@ -14,16 +14,20 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from meltify.converters import Converted
+from meltify.converters.run import PdfLook
 from meltify.evidence import Src
 from meltify.melt import FATAL
 
 
-def _melt_pdf(path: Path, src: Src) -> Converted:
-    """pdf's convert in a worker process, failing with an error the parent can unpickle"""
+def _melt_pdf(path: Path, src: Src, look: PdfLook) -> Converted:
+    """pdf's convert in a worker process, failing with an error the parent can unpickle
+
+    A worker starts in a fresh context, so the run's PDF switches come along as an argument
+    """
     from meltify.converters import pdf
 
     try:
-        return pdf.convert(path, src)
+        return pdf.melt(path, src, look)
     except FATAL:
         raise
     except BaseException as e:  # noqa: BLE001
@@ -57,9 +61,9 @@ class PdfPool:
     """Worker processes for PDFs, since PyMuPDF is only unsafe across threads
 
     Each process holds its own MuPDF, so PDFs convert in parallel instead of one at a time
-    under the shared lock. pdf's convert reads nothing but the path and src, as unlock
-    already swapped an encrypted file for its decrypted copy. A pool that can't start or
-    breaks hands its PDFs back to the lock
+    under the shared lock. pdf's convert reads nothing but the path, the src and the run's
+    page switches, as unlock already swapped an encrypted file for its decrypted copy. A pool that
+    can't start or breaks hands its PDFs back to the lock
     """
 
     def __init__(self, workers: int) -> None:
@@ -86,6 +90,7 @@ class PdfPool:
     def convert(self, convert: Callable[..., Converted], path: Path, src: Src) -> Converted | None:
         """The converted PDF, or None when this file has to go through the lock"""
         from meltify.converters import pdf
+        from meltify.converters.run import current
 
         # A converter a test or plugin swapped in may not pickle
         if convert is not pdf.convert or self._take_first():
@@ -93,7 +98,7 @@ class PdfPool:
         if (executor := self._executor()) is None:
             return None
         try:
-            task = executor.submit(_melt_pdf, path, src)
+            task = executor.submit(_melt_pdf, path, src, current().pdf)
         except (BrokenProcessPool, RuntimeError):
             # A broken or closed pool refuses work
             self.broken = True

@@ -12,10 +12,11 @@ openai_key_env = "OPENAI_API_KEY"
 openai_base_url = "https://api.openai.com/v1"
 
 [ocr]
-# auto picks every installed local engine.
+# auto picks every installed local engine
 # Paid LLM engines run only when you name them here or on the command line
 engines = "auto"
-upscale = 3
+# Resize factor for pictures before OCR, 0 to lift each small picture toward a readable size
+upscale = 0.0
 sharpen = true
 tile_max = 2576
 dpi = 300
@@ -33,33 +34,10 @@ lang = "auto"
 [media]
 max_height = 1080
 scene = 0.3
-fps = 1.0
+# Interval frames per second on top of scene changes, 0 for none
+fps = 0.0
 sub_langs = ["ko", "en"]
 dedup_distance = 4
-
-[submit]
-url = ""
-gap = 61.0
-mode = "multipart"
-field = "file"
-auth_env = ""
-score_path = "score"
-goal = "max"
-until_score = ""
-max_attempts = 0
-deadline = ""
-idle_exit = 0.0
-max_errors = 5
-
-[check]
-schema = ""
-# count is unset by default, so 0 can require an empty answer list
-unique = []
-hygiene = true
-
-[brief]
-root = "problems"
-template = "en"
 
 [read]
 # Files converted at once. Above 1, PDFs convert in worker processes
@@ -67,7 +45,7 @@ jobs = 8
 # Seconds of uncached OCR and speech per run. The rest stays listed as needs, and a rerun
 # picks it up from where the cache left off
 budget = 600
-# Scene frames to OCR per video. Transcripts always run
+# Frames kept and OCR'd per video, scene changes and intervals together, spread over it
 frames = 20
 # Largest URL download in bytes
 max_bytes = 20000000
