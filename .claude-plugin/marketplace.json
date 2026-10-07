@@ -1,6 +1,6 @@
 {
   "name": "meltify",
-  "description": "Melt files of any format into prompt-ready text where every line cites its source",
+  "description": "Melt files of any format into prompt-ready text where every block cites its source",
   "owner": {
     "name": "jeon-jihyeon"
   },
@@ -8,7 +8,7 @@
     {
       "name": "meltify",
       "source": "./plugin",
-      "description": "Melt images, PDFs, office files, mail, video and audio into prompt-ready text with a citation on every item, and check answers before they go out."
+      "description": "Melt images, PDFs, office files, mail, video and audio into prompt-ready text with a citation on every block, and check answers before they go out."
     }
   ]
 }

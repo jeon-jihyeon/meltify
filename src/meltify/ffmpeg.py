@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from meltify.safe import require_binary, run
 
 HINT = "brew install ffmpeg or apt install ffmpeg"
 PTS = re.compile(r"pts_time:\s*([0-9.]+)")
+# Seconds a probe of an unknown file gets, since it may not be media at all
+PROBE_TIMEOUT = 20
 
 
 @dataclass(frozen=True)
@@ -37,33 +41,51 @@ def _arg(path: Path) -> str:
     return str(path.resolve())
 
 
-def duration(path: Path) -> float | None:
-    probe = require_binary("ffprobe", HINT)
-    out = run(
-        [probe, "-v", "error", "-show_entries", "format=duration", "-of", "json", "-i", _arg(path)]
-    )
-    value = json.loads(out.stdout or "{}").get("format", {}).get("duration")
-    return float(value) if value else None
-
-
-def has_video(path: Path) -> bool:
+def _has_stream(path: Path, kind: str) -> bool:
     probe = require_binary("ffprobe", HINT)
     out = run(
         [
-            probe,
-            "-v",
-            "error",
-            "-select_streams",
-            "v",
-            "-show_entries",
-            "stream=index",
-            "-of",
-            "csv=p=0",
-            "-i",
-            _arg(path),
+            probe, "-v", "error", "-select_streams", kind, "-show_entries", "stream=index",
+            "-of", "csv=p=0", "-i", _arg(path),
         ]
-    )
+    )  # fmt: skip
     return bool(out.stdout.strip())
+
+
+def has_video(path: Path) -> bool:
+    return _has_stream(path, "v")
+
+
+def has_audio(path: Path) -> bool:
+    return _has_stream(path, "a")
+
+
+def media_kind(path: Path) -> str | None:
+    """`video` or `audio` when ffprobe finds a timed stream, None when it can't tell
+
+    ffprobe opens single pictures too, through its image demuxers, and ffmpeg may still have
+    no decoder for them, so those don't count however short a duration they report
+    """
+    probe = shutil.which("ffprobe")
+    if probe is None:
+        return None
+    try:
+        proc = run(
+            [probe, "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type",
+             "-of", "json", "-i", _arg(path)],
+            timeout=PROBE_TIMEOUT, check=False,
+        )  # fmt: skip
+        info = json.loads(proc.stdout or "{}")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    found = info.get("format", {})
+    demuxer = found.get("format_name") or ""
+    if proc.returncode != 0 or demuxer == "image2" or demuxer.endswith("_pipe"):
+        return None
+    if not float(found.get("duration") or 0):
+        return None
+    types = {s.get("codec_type") for s in info.get("streams", [])}
+    return "video" if "video" in types else "audio" if "audio" in types else None
 
 
 def scene_frames(

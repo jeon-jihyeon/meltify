@@ -23,6 +23,24 @@ model = "mlx-community/whisper-large-v3-turbo"
 # Spoken language, separate from lang above. auto lets Whisper detect it per recording
 lang = "auto"
 
+# [read]
+# Files converted at once. Above 1, PDFs convert in worker processes
+# jobs = 8
+# Seconds of uncached OCR and speech per run. A rerun picks up the rest
+# budget = 600
+# Scene frames to OCR per video
+# frames = 20
+# Largest URL download in bytes
+# max_bytes = 20000000
+# false keeps binary files no converter reads as unsupported instead of rendering them
+# fallback = true
+# Parquet rows melted per file, 0 for all
+# parquet_rows = 200
+
+# [render]
+# macOS only. false keeps Quick Look and Spotlight out of every render
+# quicklook = true
+
 [media]
 fps = 1.0
 scene = 0.3

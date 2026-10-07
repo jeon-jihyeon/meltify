@@ -247,7 +247,7 @@ def resolver(rows: Rows) -> Resolve:
 
 
 def images(path: Path, src: Src, resolve: Resolve | None = None) -> Embeds:
-    """Pictures, charts and diagrams in each sheet's drawing, cited by their top left cell"""
+    """Pictures, charts and diagrams in each sheet's drawing, cited by their top-left cell"""
     embeds = Embeds()
     with zipfile.ZipFile(path) as z:
         found = package(z)
@@ -326,7 +326,6 @@ def convert_binary(path: Path, src: Src) -> Converted:
         raise MissingTool("python-calamine", "meltify doctor --install office")
     out = _tables(path, src, "legacy")
     if path.suffix.lower() not in (".xls", ".xlt"):
-        # Sheets are read again only for charts whose formulas name them
         _xlsb_images(path, src, resolver(rows_by_title(path))).into(out)
     return out
 

@@ -400,19 +400,19 @@ def test_url_inputs_route_by_kind_and_record_the_fetch(cached, monkeypatch, caps
 
 
 def test_url_media_uses_subtitles_instead_of_speech(cached, monkeypatch, capsys):
-    from meltify.commands import media
+    from meltify import video
     from tests.fixtures.make_media import VTT
 
     _fake_web(monkeypatch, cached, "media")
     speech = FakeAsr()
     monkeypatch.setattr(asr, "select", lambda spec, s: speech)
 
-    def download(url, out_dir, langs, subs_only, height):
+    def download(url, out_dir, langs, subs_only, height, allow_private):
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "v.ko.vtt").write_text(VTT)
         return None, [out_dir / "v.ko.vtt"]
 
-    monkeypatch.setattr(media, "download", download)
+    monkeypatch.setattr(video, "download", download)
     url = "https://youtu.be/abc"
     rows, _ = _read(capsys, url)
     md = Path(rows[url]["out"]).read_text()
@@ -432,8 +432,8 @@ def test_missing_url_support_is_a_need(cached, monkeypatch, capsys):
 def test_pymupdf_converters_share_one_lock(tmp_path):
     import threading
 
-    from meltify.commands.read import Reader
     from meltify.converters import Converted
+    from meltify.melt import Reader
 
     reader = Reader(tmp_path, {})
     assert reader.pdf_lock is run.LOCK
@@ -458,7 +458,7 @@ def test_pymupdf_converters_share_one_lock(tmp_path):
 
     # legacy starts soffice before PyMuPDF, so it takes the lock itself only around PyMuPDF
     for kind in ("pdf", "legacy", "text"):
-        reader._convert(kind, convert, tmp_path, Src("x"))
+        reader._convert(convert, tmp_path, Src("x"), {"kind": kind})
     assert held == [True, False, False]
 
 
@@ -508,9 +508,7 @@ def test_ffmpeg_failure_on_one_video_leaves_a_need_not_a_crash(cached, monkeypat
 
     _engines(monkeypatch, Fake("vision", ["frame text"]))
     monkeypatch.setattr(asr, "select", lambda spec, s: FakeAsr())
-    monkeypatch.setattr(
-        "meltify.recognize._has_audio", lambda path: pytest.fail("frames are tried first")
-    )
+    monkeypatch.setattr(ffmpeg, "has_audio", lambda path: pytest.fail("frames are tried first"))
 
     def refuse(path, out_dir, threshold, window):
         raise RuntimeError("ffmpeg exited 234: no decoder found for: svg")
@@ -626,14 +624,14 @@ def test_worker_warnings_come_out_in_job_order(cached, monkeypatch, capsys):
 
 
 def test_big_pictures_wait_for_ocr_on_disk_with_the_same_cache_key(tmp_path, monkeypatch):
-    from meltify.commands.read import SPILL_BYTES, Reader
     from meltify.converters import Converted, RecognizeJob
+    from meltify.melt import PICTURE_SPILL_BYTES, Reader
     from meltify.recognize import Options, Recognizer
 
     temps = run.Temps()
     run.use(run.RunContext(temps=temps))
     try:
-        big = card("BIG", (2000, 1500)) + bytes(SPILL_BYTES)
+        big = card("BIG", (2000, 1500)) + bytes(PICTURE_SPILL_BYTES)
         small = card("SMALL", (200, 80))
         reader = Reader(tmp_path / "out", {})
         jobs = [
@@ -650,3 +648,48 @@ def test_big_pictures_wait_for_ocr_on_disk_with_the_same_cache_key(tmp_path, mon
         temps.remove()
         run.use(None)
     assert not spill.exists()
+
+
+def test_an_item_engines_read_without_finding_text_says_so(cached, monkeypatch, capsys):
+    from PIL import Image
+
+    Image.new("RGB", (200, 120), "white").save(cached / "blank.png")
+    (cached / "words.png").write_bytes(card("WORDS 12", (300, 100)))
+    _engines(monkeypatch, Fake("vision", []))
+    rows, _ = _read(capsys, cached / "blank.png")
+    assert rows[str(cached / "blank.png")]["needs"] == ["no text found"]
+
+    _engines(monkeypatch, Fake("vision", ["WORDS 12"]))
+    rows, _ = _read(capsys, cached / "words.png")
+    assert rows[str(cached / "words.png")]["needs"] == []
+
+
+def test_lang_flag_picks_the_ocr_language_and_its_own_cache_entry(cached, monkeypatch, capsys):
+    import meltify
+
+    seen = []
+    fake = Fake("vision", ["WORDS 12"])
+
+    def select(spec, settings):
+        seen.append(settings["lang"])
+        return [fake]
+
+    monkeypatch.setattr(engines, "select", select)
+    (cached / "words.png").write_bytes(card("WORDS 12", (300, 100)))
+    _read(capsys, cached / "words.png")
+    _read(capsys, cached / "words.png", "--lang", "en")
+    meltify.read(cached / "words.png", lang="en")
+    assert seen == ["ko", "en", "en"]
+    # The second language read the picture again instead of reusing the Korean reading
+    assert len(fake.calls) == 2
+
+
+def test_an_engine_named_on_the_command_line_is_checked_before_anything_is_written(
+    cached, monkeypatch, capsys
+):
+    # Only the key check runs, so no paid API is ever called
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    (cached / "a.txt").write_text("alpha\n")
+    assert main(["read", "a.txt", "--engines", "gemini", "--json"]) == 3
+    assert json.loads(capsys.readouterr().out)["errors"][0]["code"] == "missing"
+    assert not list((cached / "meltify-out").rglob("*.md"))

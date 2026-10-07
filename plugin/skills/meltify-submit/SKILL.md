@@ -4,7 +4,7 @@ description: Submit candidate files to a scoring or feedback endpoint no faster 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.3"
+  version: "0.2.4"
   cli: meltify submit
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write
 ---

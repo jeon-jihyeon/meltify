@@ -16,5 +16,14 @@ def not_read(n: int, what: str, why: str = "") -> str:
     return f"{count(n, what)} not read" + (f" ({why})" if why else "")
 
 
-def error_note(e: BaseException, limit: int = 200) -> str:
+# Longest error note for each place it shows up. A needs line keeps it short, a row,
+# warning or log line holds one item's failure, a command's own error gets more room,
+# and a doctor table cell less
+NEED_NOTE = 200
+ITEM_NOTE = 300
+COMMAND_NOTE = 500
+CELL_NOTE = 120
+
+
+def error_note(e: BaseException, limit: int = NEED_NOTE) -> str:
     return f"{type(e).__name__}: {e}"[:limit]

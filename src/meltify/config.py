@@ -16,7 +16,11 @@ import tomllib
 from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+from meltify import paths
+
+T = TypeVar("T")
 
 PROJECT_FILE = "meltify.toml"
 ENV_PREFIX = "MELTIFY_"
@@ -41,11 +45,6 @@ def find_project_file(start: Path) -> Path | None:
     return None
 
 
-def user_file(env: Mapping[str, str]) -> Path:
-    base = env.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "meltify" / "config.toml"
-
-
 def _read(path: Path) -> dict[str, Any]:
     try:
         return tomllib.loads(path.read_text("utf-8"))
@@ -67,6 +66,21 @@ def _merge(base: dict[str, Any], top: Mapping[str, Any]) -> None:
 # Keys left out of the defaults, so "not set" and 0 stay different.
 # The sample value only tells the env layer what type to parse
 UNSET_TYPES: dict[str, dict[str, Any]] = {"check": {"count": 0}}
+# Keys only a config file can set, like the [[check.field]] tables, so the env layer skips them
+FILE_ONLY: dict[str, set[str]] = {"check": {"field"}}
+
+
+def _unknown(layer: Mapping[str, Any], base: Mapping[str, Any], path: Path) -> list[str]:
+    """A warning per key in `layer` that no default names, since a typo would be ignored"""
+    found = []
+    for key, value in layer.items():
+        known = base.get(key)
+        if known is None:
+            found.append(key)
+        elif isinstance(known, dict) and isinstance(value, Mapping):
+            fields = {*known, *UNSET_TYPES.get(key, {}), *FILE_ONLY.get(key, ())}
+            found += [f"{key}.{field}" for field in value if field not in fields]
+    return [f"{path}: unknown setting {name}, check the spelling" for name in found]
 
 
 def _coerce(name: str, raw: str, like: Any) -> Any:
@@ -104,6 +118,20 @@ def _from_env(base: dict[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     return out
 
 
+def pick(flag: T | None, setting: T) -> T:
+    """The flag when given, else the merged setting
+
+    Only a flag left out falls back, so `--scene 0` means 0 instead of the default
+    """
+    return setting if flag is None else flag
+
+
+def overrides(*, out: str | Path | None, lang: str | None) -> dict[str, Any]:
+    """The command-line layer, from flags that map onto settings"""
+    layer = {"out_dir": None if out is None else str(out), "lang": lang}
+    return {k: v for k, v in layer.items() if v is not None}
+
+
 def load(
     overrides: Mapping[str, Any] | None = None,
     *,
@@ -113,11 +141,12 @@ def load(
 ) -> dict[str, Any]:
     env = os.environ if env is None else env
     cwd = Path.cwd() if cwd is None else cwd
-    settings = defaults()
+    known = defaults()
+    settings = copy.deepcopy(known)
     sources = ["defaults"]
 
     layers: list[Path] = []
-    if (u := user_file(env)).is_file():
+    if (u := paths.user_config(env)).is_file():
         layers.append(u)
     if project is not None:
         if not project.is_file():
@@ -125,11 +154,14 @@ def load(
         layers.append(project)
     elif (p := find_project_file(cwd)) is not None:
         layers.append(p)
+    warnings: list[str] = []
     for path in layers:
-        _merge(settings, _read(path))
+        layer = _read(path)
+        warnings += _unknown(layer, known, path)
+        _merge(settings, layer)
         sources.append(str(path))
 
-    if env_layer := _from_env(defaults(), env):
+    if env_layer := _from_env(known, env):
         _merge(settings, env_layer)
         sources.append("env")
     if overrides:
@@ -137,4 +169,5 @@ def load(
         sources.append("cli")
 
     settings["_sources"] = sources
+    settings["_warnings"] = warnings
     return settings

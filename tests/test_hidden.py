@@ -158,6 +158,21 @@ def test_scan_matches_a_plain_pass_over_the_draw_log(tmp_path, make):
     assert got == expected
 
 
+def test_page_without_text_skips_the_vector_pass(tmp_path, monkeypatch):
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page().draw_rect(pymupdf.Rect(10, 10, 100, 100), fill=(0.5, 0.5, 0.5))
+    doc.save(tmp_path / "v.pdf")
+
+    def fail(*_, **__):
+        raise AssertionError("read the drawings of a page with no text")
+
+    monkeypatch.setattr(pymupdf.Page, "get_cdrawings", fail)
+    monkeypatch.setattr(pymupdf.Page, "get_drawings", fail)
+    assert scan(str(tmp_path / "v.pdf")) == []
+
+
 def test_pdf_read_traces_each_page_once(tmp_path, monkeypatch):
     import pymupdf
 
@@ -181,3 +196,22 @@ def test_pdf_read_traces_each_page_once(tmp_path, monkeypatch):
     # The scan layer check and the hidden text check share one trace per page
     assert sorted(traced) == [0, 1, 2]
     assert out.jobs == [] and out.hidden == 3
+
+
+@pytest.mark.parametrize("name", ["notes.md", "blob.bin"])
+def test_non_pdf_input_is_a_usage_error(tmp_path, monkeypatch, capsys, name):
+    monkeypatch.chdir(tmp_path)
+    # PyMuPDF opens markdown as a document, and random bytes not at all
+    path = tmp_path / name
+    path.write_bytes(
+        b"# heading\n\nplain text\n" if name.endswith(".md") else bytes(range(256)) * 8
+    )
+    assert main(["hidden", str(path), "--json"]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["errors"][0]["message"] == f"{path} isn't a PDF, run meltify read on it instead"
+
+
+def test_missing_pdf_is_a_usage_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["hidden", "nope.pdf", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["errors"][0]["message"] == "no such file: nope.pdf"

@@ -6,10 +6,11 @@ import pytest
 
 from meltify import ffmpeg
 from meltify.cli import main
-from meltify.commands.media import _sidecars, work_name
 from meltify.converters.subtitle import parse_subtitles
 from meltify.engines import asr
 from meltify.engines.asr import Segment
+from meltify.files import work_name
+from meltify.video import sidecars
 from tests.fixtures.make_media import VTT, scenes_video
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
@@ -111,7 +112,7 @@ def test_sidecars_match_only_this_video(tmp_path):
     names = ["clip[1].vtt", "clip[1].en.srt", "clip[1]2.vtt", "clip1.vtt", "clip[1].mp4.txt"]
     for name in [video.name, *names]:
         (tmp_path / name).write_text("")
-    assert [p.name for p in _sidecars(video)] == ["clip[1].en.srt", "clip[1].vtt"]
+    assert [p.name for p in sidecars(video)] == ["clip[1].en.srt", "clip[1].vtt"]
 
 
 def test_url_work_dirs_do_not_collide():
@@ -122,3 +123,73 @@ def test_url_work_dirs_do_not_collide():
 def test_missing_file_is_a_usage_error(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["media", str(tmp_path / "none.mp4")]) == 2
+
+
+@needs_ffmpeg
+def test_a_failure_inside_a_command_still_prints_the_envelope(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MELTIFY_DEBUG", raising=False)
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"not a video")
+    assert main(["media", str(bad), "--json"]) == 1
+    captured = capsys.readouterr()
+    [error] = json.loads(captured.out)["errors"]
+    assert error["code"] == "failed" and error["message"].startswith("RuntimeError: ")
+    assert "MELTIFY_DEBUG" in error["hint"] and "Traceback" not in captured.err
+
+    monkeypatch.setenv("MELTIFY_DEBUG", "1")
+    assert main(["media", str(bad), "--json"]) == 1
+    assert "Traceback" in capsys.readouterr().err
+
+
+def test_a_url_to_a_private_address_never_reaches_yt_dlp(tmp_path, monkeypatch, capsys):
+    import socket
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    real = socket.getaddrinfo
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: real("10.0.0.7", port, type=socket.SOCK_STREAM),
+    )
+    # A None module makes any import of yt_dlp fail, so reaching it would show up as an error
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)
+    assert main(["media", "http://intranet.test/clip.mp4", "--json"]) == 2
+    [error] = json.loads(capsys.readouterr().out)["errors"]
+    assert "blocked intranet.test: 10.0.0.7 isn't a public address" in error["message"]
+
+
+def test_zero_flags_are_values_not_the_default(tmp_path, monkeypatch, capsys):
+    from meltify.safe import MissingTool
+
+    def no_speech(spec, s):
+        raise MissingTool("speech engine", "install one")
+
+    seen = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(asr, "select", no_speech)
+    monkeypatch.setattr(ffmpeg, "has_video", lambda path: True)
+    monkeypatch.setattr(ffmpeg, "scene_frames", lambda p, d, scene, w: seen.append(scene) or [])
+    monkeypatch.setattr(ffmpeg, "interval_frames", lambda p, d, fps, w: [])
+    Path("clip.mp4").write_bytes(b"x")
+    assert main(["media", "clip.mp4", "--scene", "0", "--json"]) == 0
+    assert seen == [0.0]
+    # Zero frames per second has no interval, so it's a usage error instead of the default
+    assert main(["media", "clip.mp4", "--fps", "0", "--json"]) == 2
+    assert "--fps must be above 0" in capsys.readouterr().out
+
+
+def test_scene_out_of_range_is_a_usage_error_and_fps_matters_only_for_frames(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    assert main(["media", str(clip), "--scene", "-1", "--json"]) == 2
+    assert (
+        "--scene must be between 0 and 1"
+        in json.loads(capsys.readouterr().out)["errors"][0]["message"]
+    )
+    # Frames aren't taken with --subs-only, so a zero fps doesn't stop the run there
+    assert main(["media", str(clip), "--fps", "0", "--subs-only", "--json"]) != 2

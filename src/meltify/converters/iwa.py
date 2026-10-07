@@ -5,7 +5,7 @@ run of chunks, a zero tag byte and a 3-byte little-endian length followed by a r
 Snappy block with no stream framing or CRC. The joined blocks are a stream of
 archives, each a varint length, a `TSP.ArchiveInfo` naming the object id and the
 message types, then the payloads. Fields are read by number, so only the message
-and field numbers in iwork.py are format knowledge. Ported from Docling's pure
+and field numbers in the iwork modules are format knowledge. Ported from Docling's pure
 Python reader (MIT), https://github.com/docling-project/docling/pull/4062
 """
 
@@ -17,7 +17,7 @@ from typing import NamedTuple
 # A hostile chunk can declare 16 MB and expand 21x, so every stream of a document
 # shares one cap
 MAX_STREAM_BYTES = 256 << 20
-# A TSP.Reference is a single varint field, anything longer is a nested message
+# A TSP.Reference is a single varint field, so anything longer is a nested message
 MAX_REFERENCE = 11
 
 Fields = dict[int, list[int | bytes]]
@@ -108,6 +108,8 @@ def _target(value: bytes) -> int | None:
 def all_refs(payload: bytes, depth: int = 0) -> list[int]:
     """Every object id a message points at, nested messages included, in stored order"""
     found: list[int] = []
+    # Any bytes field that isn't a reference is walked as a message, strings included, so
+    # the descent stops a few levels down
     if depth > 4:
         return found
     for values in fields(payload).values():

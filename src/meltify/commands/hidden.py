@@ -31,11 +31,22 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
 
     env = Envelope(command=NAME, version=__version__)
     out_dir = Path(settings["out_dir"]) / "hidden"
-    dpi = int(settings.get("ocr", {}).get("dpi", 300))
+    dpi = int(settings["ocr"]["dpi"])
     names = flat_names(args.pdf)
     for path in args.pdf:
-        with pymupdf.open(path) as doc:
-            pages = parse_pages(args.pages, doc.page_count)
+        # PyMuPDF raises its own FileNotFoundError, which isn't the builtin one
+        if not path.is_file():
+            raise IsADirectoryError(path) if path.is_dir() else FileNotFoundError(path)
+        # PyMuPDF opens text and some images too, and they'd scan clean without a word of warning
+        try:
+            with pymupdf.open(path) as doc:
+                is_pdf, page_count = doc.is_pdf, doc.page_count
+        except pymupdf.FileDataError:
+            is_pdf = False
+        if not is_pdf:
+            env.error(USAGE, f"{path} isn't a PDF, run meltify read on it instead")
+            return env
+        pages = parse_pages(args.pages, page_count)
         if not pages:
             env.error(USAGE, f"{path} has no pages to scan")
             return env

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
-from meltify import safe
+from meltify import paths, safe
 
 
 @dataclass(frozen=True)
@@ -90,19 +90,13 @@ DOWNLOAD_ATTEMPTS = 3
 HDIUTIL_TIMEOUT = 300
 
 
-def tools_dir() -> Path:
-    from meltify.commands.doctor import data_dir
-
-    return data_dir(dict(os.environ)) / "tools"
-
-
 def find(name: str, *installed: str) -> str | None:
     """A downloaded copy first, then the system PATH
 
     `installed` lists paths inside the tools dir to try, like `libreoffice/program/soffice`
     """
     for rel in installed or (name,):
-        path = tools_dir() / rel
+        path = paths.tools_dir() / rel
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
     return shutil.which(name)

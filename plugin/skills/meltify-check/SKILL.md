@@ -4,7 +4,7 @@ description: Check an answer file or a single string against its stated output f
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.3"
+  version: "0.2.4"
   cli: meltify check
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write
 ---
@@ -28,13 +28,13 @@ Rules that repeat across runs belong in `meltify.toml`. See `references/rules.md
 
 - Exit 0 prints `no violations`
 - Exit 1 lists each violation with its `rule`, `message`, `value` and a `cite` such as `answers.json#$[3].reason`
-- Hygiene rules run on every string by default: leading or trailing whitespace, double spaces, and fullwidth characters such as `１２`
+- Hygiene rules run on every string by default: leading or trailing whitespace, double spaces, and full-width characters such as `１２`
 - Exit 2 is a usage error. Text rules on a file need `--field`
 
 ## Gotchas
 
 - `--text` ignores the rules in `meltify.toml` and uses only its own flags. `--schema`, `--count`, `--unique` and `--field` apply to files only, so combining them with `--text` is a usage error.
-- `\d` in `--pattern` also matches fullwidth digits. Use `[0-9]` or `--digits`, and keep hygiene on.
+- `\d` in `--pattern` also matches full-width digits. Use `[0-9]` or `--digits`, and keep hygiene on.
 - Paths support only `$`, `.key`, `[n]`, `[-1]` and `[*]`. Filters such as `[?(...)]` are a usage error.
 
 ## Then

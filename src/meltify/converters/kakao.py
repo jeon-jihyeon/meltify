@@ -50,7 +50,7 @@ def _stamp(y, mo, d, h, mi) -> str:
 
 
 def _who_said(rest: str) -> tuple[str, str]:
-    # A message is `name : text`, anything else on a dated line is a system notice
+    # A message is `name : text`. Anything else on a dated line is a system notice
     name, sep, text = rest.partition(" : ")
     return (name, text) if sep else ("", rest)
 
@@ -140,6 +140,8 @@ def sniff(path: Path, head: bytes) -> bool:
         return True
     day = None
     hits = 0
+    # An export opens with a short header and then messages, so three within the first 60
+    # lines mark one, while a note quoting a line or two of chat doesn't pass
     for line in text.splitlines()[:60]:
         day = _day(line) or day
         hits += _message(line, day) is not None

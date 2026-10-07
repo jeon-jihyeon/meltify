@@ -6,6 +6,7 @@ from typing import Any
 SCHEMA = "meltify/v1"
 MISSING = "missing"
 USAGE = "usage"
+FAILED = "failed"
 
 
 def clock(seconds: float) -> str:

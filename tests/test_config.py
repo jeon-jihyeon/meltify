@@ -111,3 +111,22 @@ def test_cli_reports_config_error_as_json(tmp_path, monkeypatch, capsys):
 def test_env_sets_keys_that_are_unset_by_default(tmp_path):
     settings = config.load(cwd=tmp_path, env={"MELTIFY_CHECK_COUNT": "3"})
     assert settings["check"]["count"] == 3
+
+
+def test_a_misspelled_setting_warns_instead_of_vanishing(tmp_path, home, monkeypatch, capsys):
+    project = _write(
+        tmp_path / "meltify.toml",
+        "jobz = 2\n[read]\nbudgett = 5\njobs = 1\n[ocrr]\ndpi = 1\n[check]\ncount = 3\n",
+    )
+    s = config.load(cwd=tmp_path, env=home)
+    assert s["_warnings"] == [
+        f"{project}: unknown setting {name}, check the spelling"
+        for name in ["jobz", "read.budgett", "ocrr"]
+    ]
+    assert config.load(cwd=tmp_path / "xdg", env=home)["_warnings"] == []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", home["XDG_CONFIG_HOME"])
+    assert cli.main(["brief", "board", "--json"]) == 0
+    warnings = json.loads(capsys.readouterr().out)["warnings"]
+    assert warnings[0] == f"{project}: unknown setting jobz, check the spelling"

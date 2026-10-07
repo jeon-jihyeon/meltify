@@ -112,7 +112,7 @@ def _blip(data: bytes, at: int, embeds: Embeds) -> Picture:
     ext = BLIPS.get(kind)
     if ext is None:
         return None
-    # Odd instances carry a second 16 byte id
+    # Odd instances carry a second 16-byte id
     body += 16 * (1 + (inst & 1))
     if ext in METAFILES:
         if end - body < 34:
@@ -127,7 +127,7 @@ def _blip(data: bytes, at: int, embeds: Embeds) -> Picture:
         if compression == 0:
             raw = zlib.decompressobj().decompress(raw, cap)
     else:
-        # Raster pictures have a one byte tag before the file, and a bitmap gains a header
+        # Raster pictures have a one-byte tag before the file, and a bitmap gains a header
         if why := embeds.refusal(end - body - 1 + 14 * (ext == ".bmp")):
             return why
         raw = data[body + 1 : end]
@@ -156,7 +156,8 @@ def bmp(dib: bytes) -> bytes:
 def entry(data: bytes, a: int, b: int, delayed: bytes, blips: Blips) -> Picture:
     """One store entry's picture, kept in the entry or at its offset in `delayed`
 
-    None for an empty or deleted entry, and an empty picture for one that can't be read
+    None for an empty or deleted entry, and the `unreadable image` skip key for one that
+    can't be read
     """
     if b - a < 36:
         return None

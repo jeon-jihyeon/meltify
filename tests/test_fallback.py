@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from meltify import ffmpeg
 from meltify.converters import fallback, pick, quicklook, render
 from meltify.converters import run as run_state
 from meltify.converters.run import RunContext
@@ -51,7 +52,7 @@ def _no_subprocess(monkeypatch):
 
 
 def _no_media_or_preview(monkeypatch):
-    monkeypatch.setattr(fallback, "_media", lambda path: None)
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: None)
     monkeypatch.setattr(quicklook, "available", lambda: False)
 
 
@@ -185,8 +186,8 @@ def test_garbage_and_single_images_are_not_media(tmp_path):
     junk.write_bytes(BINARY * 100)
     still = tmp_path / "b.xyz"
     still.write_bytes(_png())
-    assert fallback._media(junk) is None
-    assert fallback._media(still) is None
+    assert ffmpeg.media_kind(junk) is None
+    assert ffmpeg.media_kind(still) is None
 
 
 def _fake_thumbnail(monkeypatch, png: bytes | None, hang: bool = False):
@@ -194,7 +195,7 @@ def _fake_thumbnail(monkeypatch, png: bytes | None, hang: bool = False):
     calls = {"killed": []}
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(fallback, "_media", lambda path: None)
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: None)
     monkeypatch.setattr(fallback, "_spotlight", lambda path, src: None)
     monkeypatch.setattr(quicklook, "previewable", lambda path: True)
     monkeypatch.setattr(quicklook, "to_pdf", lambda path, out_dir=None, timeout=0: None)
@@ -255,7 +256,7 @@ def _fake_full_preview(monkeypatch, seen):
         seen.append(path)
         return _two_page_pdf(out_dir / f"{path.stem}.pdf")
 
-    monkeypatch.setattr(fallback, "_media", lambda path: None)
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: None)
     monkeypatch.setattr(quicklook, "available", lambda: True)
     monkeypatch.setattr(quicklook, "to_pdf", to_pdf)
     monkeypatch.setattr(fallback, "_thumbnail", lambda path, src: pytest.fail("full preview won"))
@@ -289,7 +290,7 @@ def test_libreoffice_formats_reach_quicklook_through_render(tmp_path, monkeypatc
 def test_spotlight_text_comes_before_the_thumbnail(tmp_path, monkeypatch):
     f = tmp_path / "a.xyz"
     f.write_bytes(BINARY)
-    monkeypatch.setattr(fallback, "_media", lambda path: None)
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: None)
     monkeypatch.setattr(quicklook, "available", lambda: True)
     monkeypatch.setattr(quicklook, "to_pdf", lambda path, out_dir=None, timeout=0: None)
     monkeypatch.setattr(fallback, "_spotlight_text", lambda path: "Indexed text 42")
@@ -387,7 +388,7 @@ def _text_image(path: Path, fmt: str) -> Path:
 
 def test_pillow_formats_without_a_suffix_entry_go_to_ocr(tmp_path, monkeypatch):
     f = _text_image(tmp_path / "scan.pcx", "PCX")
-    monkeypatch.setattr(fallback, "_media", lambda path: pytest.fail("Pillow reads it"))
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: pytest.fail("Pillow reads it"))
     kind, convert = pick(f)
     out = convert(f, Src(str(f)))
     assert kind == "unknown" and out.kind == "image"
@@ -407,8 +408,8 @@ def test_still_images_ffprobe_opens_are_not_media(tmp_path):
     svg = tmp_path / "pic.svgq"
     svg.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="10"/>')
     pcx = _text_image(tmp_path / "scan.pcxq", "PCX")
-    assert fallback._media(svg) is None
-    assert fallback._media(pcx) is None
+    assert ffmpeg.media_kind(svg) is None
+    assert ffmpeg.media_kind(pcx) is None
 
 
 def test_workdir_is_removed_at_exit_even_from_a_thread():
@@ -419,6 +420,34 @@ def test_workdir_is_removed_at_exit_even_from_a_thread():
     assert folder.is_dir()
     run_state._cleanup()
     assert not folder.exists()
+
+
+def _fresh_workdirs(tmp_path, monkeypatch):
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(run_state, "_LIVE", set())
+    monkeypatch.setattr(run_state, "_sweep_at", run_state.SWEEP_MIN)
+
+
+def test_workdirs_their_callers_removed_leave_the_exit_list(tmp_path, monkeypatch):
+    _fresh_workdirs(tmp_path, monkeypatch)
+    kept = run_state.workdir("meltify-test-")
+    for _ in range(run_state.SWEEP_MIN * 4):
+        shutil.rmtree(run_state.workdir("meltify-test-"))
+    assert kept in run_state._LIVE and len(run_state._LIVE) < run_state.SWEEP_MIN
+
+
+def test_making_workdirs_checks_a_linear_number_of_paths(tmp_path, monkeypatch):
+    _fresh_workdirs(tmp_path, monkeypatch)
+    checked = []
+    gone = run_state._gone
+    monkeypatch.setattr(run_state, "_gone", lambda paths: checked.append(len(paths)) or gone(paths))
+    made = 1000
+    for _ in range(made):
+        run_state.workdir("meltify-test-")
+    # A sweep only runs once the live set doubles, so the checks add up to about 2n
+    assert sum(checked) < 2 * made
 
 
 def test_rendered_pdf_with_ocr_pages_stays_until_its_run_ends(tmp_path, monkeypatch):
@@ -616,10 +645,10 @@ def _hanging_tool(folder: Path, name: str, pid_file: Path) -> Path:
 
 
 def _sites():
-    from meltify.converters import archive, wordperfect
+    from meltify.converters import archive_backends, wordperfect
 
     return {
-        "ffprobe": (fallback, "PROBE_TIMEOUT", lambda bin, p: fallback._media(p)),
+        "ffprobe": (ffmpeg, "PROBE_TIMEOUT", lambda bin, p: ffmpeg.media_kind(p)),
         "textutil": (fallback, "SPOTLIGHT_TIMEOUT", lambda bin, p: fallback._spotlight_text(p)),
         "mdimport": (fallback, "SPOTLIGHT_TIMEOUT", lambda bin, p: fallback._spotlight_text(p)),
         "mdls": (quicklook, "MDLS_TIMEOUT", lambda bin, p: quicklook.previewable(p)),
@@ -629,9 +658,9 @@ def _sites():
             lambda bin, p: wordperfect._wpd2text(str(bin / "wpd2text"), p),
         ),
         "7zz": (
-            archive,
+            archive_backends,
             "LIST_TIMEOUT",
-            lambda bin, p: archive._sevenzip_list(str(bin / "7zz"), p, "secret"),
+            lambda bin, p: archive_backends._sevenzip_list(str(bin / "7zz"), p, "secret"),
         ),
     }
 
@@ -745,7 +774,7 @@ def test_an_unknown_binary_asks_spotlight_its_type_once_and_skips_ffprobe(tmp_pa
 )  # fmt: skip
 def test_media_magic_still_reaches_ffprobe(tmp_path, monkeypatch, head):
     probed = []
-    monkeypatch.setattr(fallback, "_media", lambda path: probed.append(path) or "audio")
+    monkeypatch.setattr(ffmpeg, "media_kind", lambda path: probed.append(path) or "audio")
     f = tmp_path / "clip.qqq"
     f.write_bytes(head + bytes(64))
     assert fallback.convert(f, Src(str(f))).kind == "media" and probed == [f]

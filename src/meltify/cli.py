@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import sys
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
 from meltify import __version__, config
-from meltify.evidence import MISSING, USAGE, Envelope
+from meltify.evidence import FAILED, MISSING, USAGE, Envelope
+from meltify.needs import COMMAND_NOTE, error_note
 from meltify.output import emit
 from meltify.safe import MissingTool
 
@@ -67,6 +70,23 @@ def build_parser(modules: Sequence[ModuleType]) -> argparse.ArgumentParser:
     return parser
 
 
+def _failure(e: Exception) -> tuple[str, str, str | None]:
+    """Error code, message and hint for an exception a command let through"""
+    if isinstance(e, MissingTool):
+        return MISSING, str(e), e.hint
+    if isinstance(e, FileNotFoundError):
+        return USAGE, f"no such file: {e.filename or e}", None
+    if isinstance(e, IsADirectoryError):
+        return USAGE, f"expected a file, got a folder: {e.filename or e}", None
+    if isinstance(e, ValueError):
+        # meltify raises plain ValueErrors whose message says what to fix. A subclass, like a
+        # JSON or decode error from a library, keeps its name, since that's the only context
+        return USAGE, str(e) if type(e) is ValueError else error_note(e, COMMAND_NOTE), None
+    if os.environ.get("MELTIFY_DEBUG"):
+        traceback.print_exc()
+    return FAILED, error_note(e, COMMAND_NOTE), "set MELTIFY_DEBUG=1 to see the traceback"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     modules = _modules()
     parser = build_parser(modules)
@@ -76,11 +96,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return USAGE_ERROR
     module = args._module
 
-    overrides = {"out_dir": str(args.out)} if args.out is not None else None
+    overrides = config.overrides(out=args.out, lang=getattr(args, "lang", None))
+    # Every failure lands in the envelope, so --json callers still get valid JSON
     try:
         settings = config.load(overrides, project=args.config)
     except config.ConfigError as e:
-        # Report it in the envelope, so --json callers still get valid JSON
         env = Envelope(command=module.NAME, version=__version__)
         env.error(USAGE, f"config: {e}")
         emit(env, as_json=args.json, columns=module.COLUMNS, limit=args.limit)
@@ -88,12 +108,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         env = module.run(args, settings)
-    except MissingTool as e:
+    except Exception as e:  # noqa: BLE001
         env = Envelope(command=module.NAME, version=__version__)
-        env.error(MISSING, str(e), e.hint)
-    except (FileNotFoundError, IsADirectoryError, ValueError) as e:
-        # Report bad input in the envelope, so --json callers still get valid JSON
-        env = Envelope(command=module.NAME, version=__version__)
-        env.error(USAGE, f"{type(e).__name__}: {e}")
+        env.error(*_failure(e))
+    env.warnings[:0] = settings["_warnings"]
     emit(env, as_json=args.json, columns=env.columns or module.COLUMNS, limit=args.limit)
     return env.exit_code

@@ -3,17 +3,19 @@
 ## Setup
 
 ```
-uv sync
+uv sync --locked
 uv run pytest -m "not llm and not heavy"
 uv run ruff check . && uv run ruff format --check .
 ```
 
+`--locked` installs exactly what `uv.lock` pins, the way CI does. Tests marked `llm` call a paid API and `heavy` ones download large models, so the `-m` filter leaves both out. Media tests skip themselves when `ffmpeg` isn't on `PATH`.
+
 Run the full suite before you send a change, not just the tests next to your edit. Converters share limits, picture handling and run state, so a fix in one often shows up in another.
 
-CI runs the suite a second time with the common extras, so their converters get covered too. Do the same before you touch one:
+CI runs on macOS and Linux with Python 3.11, 3.12 and 3.13, and runs the suite a second time with the common extras, so their converters get covered too. Do the same before you touch one:
 
 ```
-uv sync --extra office --extra archive --extra parquet --extra crypto
+uv sync --locked --extra office --extra archive --extra parquet --extra crypto
 uv run pytest -m "not llm and not heavy"
 ```
 
@@ -31,6 +33,8 @@ After you change the version in `pyproject.toml` or the launcher template, run `
   - `blips`: the drawing records and picture store Word and PowerPoint binaries share, read by `doc` and `ppt`
   - `tables`: markdown tables a reader can cite cell by cell
   - `fallback`: the last resort for binary files no converter reads
+- `src/meltify/forensics/`: the PDF hidden-text checks behind `hidden` and the `hidden` column of `read`
+- `src/meltify/fetch.py`: URL downloads for `read`, with the address, redirect and `robots.txt` checks
 - `src/meltify/needs.py` and `src/meltify/passwords.py`: the wording of `needs` lines, so every converter reports the same gap the same way
 - `src/meltify/safe.py`: the subprocess runner that kills a whole process group on timeout
 - `tests/fixtures/`: generators for the test inputs. `make_binary.py` builds compound files, WMF pictures and encrypted workbooks, since the libraries meltify uses only read them
@@ -44,7 +48,7 @@ After you change the version in `pyproject.toml` or the launcher template, run `
 - Converters read run state through `run.current()`, never module globals. Each worker thread runs in a copy of the run's context, so two runs in one process never see each other's state
 - Reuse the wording in `needs.py` and `passwords.py` for any gap they already cover, like a missing LibreOffice or a locked file
 - Paid engines never run unless they're named
-- Mark tests that call a paid API as `llm`. They run only with `MELTIFY_TEST_LLM=1`
+- Mark tests that call a paid API as `llm`, so `-m "not llm"` leaves them out
 - Write commit messages as `type: what changed`, where type is feat, fix, docs, refactor, test or chore
 
 ## Writing style

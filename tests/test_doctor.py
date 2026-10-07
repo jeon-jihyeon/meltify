@@ -1,8 +1,9 @@
 import json
+import sys
 
 import pytest
 
-from meltify import safe, tools
+from meltify import __version__, paths, safe, tools
 from meltify.cli import main
 from meltify.commands import doctor
 
@@ -37,16 +38,18 @@ def test_missing_base_module_exits_three(monkeypatch, tmp_path):
     assert main(["doctor", "--quick"]) == 3
 
 
-def test_engines_tolerate_a_missing_asr_section():
-    names = ("claude_model", "anthropic_key_env", "gemini_model", "gemini_key_env")
-    llm = {n: "x" for n in (*names, "openai_model", "openai_key_env", "openai_base_url")}
-    checks = {r["check"] for r in doctor.engines({"lang": "ko", "llm": llm})}
+def test_engines_list_every_ocr_and_asr_engine():
+    from meltify import config
+    from meltify.engines import ocr
+
+    checks = {r["check"] for r in doctor.engines(config.defaults())}
+    assert {f"ocr {name}" for name in ocr.ENGINES} <= checks
     assert {"asr mlx", "asr whispercpp", "asr api"} <= checks
 
 
 def test_data_dir_matches_the_launcher(tmp_path):
-    assert doctor.data_dir({"CLAUDE_PLUGIN_DATA": "/p"}).as_posix() == "/p"
-    assert doctor.data_dir({"XDG_DATA_HOME": "/x"}).as_posix() == "/x/meltify"
+    assert paths.data_dir({"CLAUDE_PLUGIN_DATA": "/p"}).as_posix() == "/p"
+    assert paths.data_dir({"XDG_DATA_HOME": "/x"}).as_posix() == "/x/meltify"
 
 
 def test_install_creates_venv_and_marker(monkeypatch, tmp_path, capsys):
@@ -60,6 +63,7 @@ def test_install_creates_venv_and_marker(monkeypatch, tmp_path, capsys):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("MELTIFY_LAUNCHER", "1")
     monkeypatch.setattr(safe, "run", fake_run)
     monkeypatch.setattr(safe, "require_binary", lambda name, hint: "uv")
     assert main(["doctor", "--install", "media"]) == 0
@@ -113,6 +117,7 @@ def _fake_install(monkeypatch, tmp_path, calls):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("MELTIFY_LAUNCHER", "1")
     monkeypatch.setattr(safe, "run", fake_run)
     monkeypatch.setattr(safe, "require_binary", lambda name, hint: "uv")
     monkeypatch.setattr(tools, "install_seven_zip", lambda root: root / "7zip/7zz")
@@ -199,6 +204,66 @@ def test_install_archive_keeps_the_venv_when_7zip_cant_download(monkeypatch, tmp
     assert "put 7zz or 7z on PATH" in rows["install 7zip"]["hint"]
     assert any(w.startswith("install 7zip:") for w in out["warnings"])
     assert (tmp_path / "data/venv/.meltify-version").read_text() == doctor.__version__
+
+
+def _outside_launcher(monkeypatch, tmp_path, installer: str | None = None) -> list[list[str]]:
+    import importlib.metadata
+    import sys
+
+    calls: list[list[str]] = []
+    _fake_install(monkeypatch, tmp_path, calls)
+    monkeypatch.delenv("MELTIFY_LAUNCHER")
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+
+    class Dist:
+        def read_text(self, name):
+            return installer
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: Dist())
+    return calls
+
+
+def test_install_outside_the_launcher_prints_the_command_instead(monkeypatch, tmp_path, capsys):
+    calls = _outside_launcher(monkeypatch, tmp_path, "pip\n")
+    monkeypatch.setattr(doctor, "installed_extras", lambda: [])
+    assert main(["doctor", "--install", "office", "--json"]) == 3
+    out = json.loads(capsys.readouterr().out)
+    # A venv the launcher would use, but this meltify never would, isn't created
+    assert calls == [] and not (tmp_path / "data/venv").exists()
+    pip = f"{sys.executable} -m pip install 'meltify[office]=={__version__}'"
+    assert out["errors"][0]["hint"] == pip
+    assert out["summary"] == f"to add office, run {pip}"
+
+
+def test_install_command_follows_how_meltify_was_installed(monkeypatch, tmp_path):
+    import sys
+
+    _outside_launcher(monkeypatch, tmp_path, "uv\n")
+    # Extras already in place stay in the requirement, and the version stays pinned
+    monkeypatch.setattr(doctor, "installed_extras", lambda: ["office"])
+    spec = f"'meltify[media,office]=={__version__}'"
+    assert doctor.extra_command("media") == (
+        f"uv tool install {spec}, or {sys.executable} -m pip install {spec}"
+    )
+    (tmp_path / "prefix/uv-receipt.toml").write_text("")
+    assert doctor.extra_command("media") == f"uv tool install {spec}"
+    # Running from the launcher's venv counts even without the variable
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "data/venv"))
+    assert doctor.launched({"CLAUDE_PLUGIN_DATA": str(tmp_path / "data")})
+
+
+def test_install_archive_outside_the_launcher_still_fetches_7zip(monkeypatch, tmp_path, capsys):
+    calls = _outside_launcher(monkeypatch, tmp_path)
+    monkeypatch.setattr(doctor, "installed_extras", lambda: [])
+    got = []
+    monkeypatch.setattr(tools, "install_seven_zip", lambda root: got.append(root) or root)
+    assert main(["doctor", "--install", "archive", "--json"]) == 3
+    out = json.loads(capsys.readouterr().out)
+    assert calls == [] and got == [tmp_path / "data/tools"]
+    assert [r["check"] for r in out["results"]] == ["install 7zip"]
+    assert f"pip install 'meltify[archive]=={__version__}'" in out["errors"][0]["hint"]
 
 
 def test_unpinned_platforms_fail_with_a_hint(monkeypatch, tmp_path):

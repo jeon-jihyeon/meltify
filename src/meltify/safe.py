@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar, overload
 
-from meltify.needs import error_note
+from meltify.needs import ITEM_NOTE, error_note
 
 T = TypeVar("T")
 
@@ -40,7 +40,7 @@ def attempt(fn: Callable[..., T], *args: Any, **kwargs: Any) -> Outcome:
     except MissingTool:
         raise
     except Exception as e:  # noqa: BLE001
-        return Outcome(error=error_note(e, 300))
+        return Outcome(error=error_note(e, ITEM_NOTE))
 
 
 def require_binary(name: str, hint: str) -> str:

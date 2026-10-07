@@ -11,10 +11,11 @@ import atexit
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # PyMuPDF isn't thread-safe, and read converts files in parallel. Reentrant, because a PDF
 # conversion that holds it can reach a page render through an embedded picture
@@ -22,6 +23,9 @@ LOCK = threading.RLock()
 # Every workdir not yet removed, so the exit cleanup reaches the ones a run never released
 _LIVE: set[Path] = set()
 _LIVE_LOCK = threading.Lock()
+# Fewest live workdirs that start a sweep for the ones callers already removed
+SWEEP_MIN = 64
+_sweep_at = SWEEP_MIN
 
 
 class Temps:
@@ -75,11 +79,21 @@ class RunContext:
     # head is melted and the rest counted
     parquet_rows: int = 200
     quicklook: bool = True  # render.quicklook
-    # State the run's workers share, which two runs with the same settings still don't
+    # Shared by the run's workers but never by two runs, so equality leaves them out
     budget: Budget = field(default_factory=Budget, compare=False)
     webkit: WebKit = field(default_factory=WebKit, compare=False)
     # Where workdirs go to be removed with the run, None to leave them to the caller or exit
     temps: Temps | None = field(default=None, compare=False)
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, Any], **run: Any) -> RunContext:
+        """The switches `settings` holds, with per-run values like the password in `run`"""
+        return cls(
+            fallback=bool(settings["read"]["fallback"]),
+            parquet_rows=int(settings["read"]["parquet_rows"]),
+            quicklook=bool(settings["render"]["quicklook"]),
+            **run,
+        )
 
 
 _RUN: ContextVar[RunContext | None] = ContextVar("meltify_run", default=None)
@@ -112,10 +126,16 @@ def workdir(prefix: str) -> Path:
     the file is done with. The folder goes when the run finishes, at process exit at the
     latest, or earlier once the caller removes it itself
     """
+    global _sweep_at
     folder = Path(tempfile.mkdtemp(prefix=prefix))
     with _LIVE_LOCK:
-        _LIVE.difference_update(_gone(_LIVE))
         _LIVE.add(folder)
+        # Sweeping on every call would cost n squared exists checks for n workdirs. Waiting
+        # until the set doubles keeps each sweep proportional to the workdirs made since the
+        # last one
+        if len(_LIVE) >= _sweep_at:
+            _LIVE.difference_update(_gone(_LIVE))
+            _sweep_at = max(SWEEP_MIN, 2 * len(_LIVE))
     temps = current().temps
     if temps is not None:
         temps.add(folder)

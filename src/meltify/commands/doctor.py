@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import importlib.util
 import os
 import platform
+import re
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
-from meltify import __version__
+from meltify import __version__, paths
 from meltify.evidence import MISSING, Envelope
-from meltify.needs import error_note
+from meltify.needs import CELL_NOTE, error_note
 
 NAME = "doctor"
 HELP = "check engines, binaries and API keys that the other commands need"
@@ -97,7 +99,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
         "--install",
         choices=EXTRAS,
         help="install an optional extra into the launcher's venv in the data dir, or "
-        "download a portable LibreOffice with `libreoffice`",
+        "download a portable LibreOffice with `libreoffice`. Outside the launcher, prints "
+        "the uv or pip command instead",
     )
     p.add_argument("--probe", action="store_true", help="make one tiny paid call per API key")
 
@@ -127,9 +130,9 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
             _row(f"module {module}", found, "importable" if found else "missing", used_by, hint)
         )
 
-    llm = settings.get("llm", {})
+    llm = settings["llm"]
     for key in ("anthropic_key_env", "gemini_key_env", "openai_key_env"):
-        name = llm.get(key, "")
+        name = llm[key]
         # Report only presence, since key values must never reach a transcript
         present = bool(name and env.get(name))
         rows.append(
@@ -151,17 +154,16 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
         from meltify.converters import run
 
         # So the quicklook row reports what read would do with these settings
-        looks = bool(settings.get("render", {}).get("quicklook", True))
-        run.use(run.RunContext(quicklook=looks))
+        run.use(run.RunContext.from_settings(settings))
         rows += system_parts()
-        out = Path(settings.get("out_dir", "."))
+        out = Path(settings["out_dir"])
         probe = out if out.exists() else Path.cwd()
         free = shutil.disk_usage(probe).free / 2**30
         rows.append(
             _row("disk free", free > 5, f"{free:.0f} GB at {probe}", "model downloads", "free 5 GB")
         )
 
-    rows.append(_row("data dir", True, str(data_dir(env))))
+    rows.append(_row("data dir", True, str(paths.data_dir(env))))
     return rows
 
 
@@ -171,9 +173,8 @@ def chrome() -> str | None:
 
 
 def _where(binary: str) -> str:
-    from meltify import tools
 
-    return f"{binary} (downloaded)" if Path(binary).is_relative_to(tools.tools_dir()) else binary
+    return f"{binary} (downloaded)" if Path(binary).is_relative_to(paths.tools_dir()) else binary
 
 
 def system_parts() -> list[dict[str, Any]]:
@@ -243,7 +244,7 @@ def engines(settings: dict[str, Any]) -> list[dict[str, Any]]:
     from meltify.engines import asr, ocr
 
     rows = []
-    for name in ("vision", "paddle", "gemini", "claude", "openai"):
+    for name in ocr.ENGINES:
         why = ocr.build(name, settings).missing()
         rows.append(
             _row(
@@ -268,14 +269,6 @@ def engines(settings: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def data_dir(env: dict[str, str]) -> Path:
-    # Must match the launcher, so it finds the venv installed here
-    if env.get("CLAUDE_PLUGIN_DATA"):
-        return Path(env["CLAUDE_PLUGIN_DATA"])
-    base = env.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "meltify"
-
-
 def source_checkout() -> Path | None:
     here = Path(__file__).resolve()
     for d in here.parents:
@@ -290,10 +283,10 @@ def _size(n: int) -> str:
 
 
 def install_tool(name: str, env: dict[str, str]) -> dict[str, Any]:
-    """Download one pinned helper binary into the tools dir"""
+    """Download pinned 7-Zip, or LibreOffice when `name` is libreoffice"""
     from meltify import tools
 
-    root = data_dir(env) / "tools"
+    root = paths.tools_dir(env)
     if name == "libreoffice":
         item = tools.pinned(tools.LIBREOFFICE, "LibreOffice")
         what, used_by = f"LibreOffice {tools.LIBREOFFICE_VERSION}", "read renders"
@@ -308,13 +301,67 @@ def install_tool(name: str, env: dict[str, str]) -> dict[str, Any]:
     return _row(f"install {name}", True, f"{what}, {_size(item.size)}, at {binary}", used_by, "")
 
 
+def launched(env: dict[str, str]) -> bool:
+    """Whether the launcher runs this meltify, so it'll pick up an extra added to its venv"""
+    venv = paths.data_dir(env) / "venv"
+    return env.get("MELTIFY_LAUNCHER") == "1" or Path(sys.prefix).resolve() == venv.resolve()
+
+
+def extra_command(extra: str) -> str:
+    """The command that adds `extra` to the environment this meltify runs from
+
+    It names this version and every extra already in place, since uv tool replaces the whole
+    requirement and an unpinned one could move to another release
+    """
+    extras = ",".join(sorted({*installed_extras(), extra}))
+    spec = f"'meltify[{extras}]=={__version__}'"
+    uv_tool = f"uv tool install {spec}"
+    pip = f"{sys.executable} -m pip install {spec}"
+    # uv tool leaves a receipt in each tool's venv
+    if (Path(sys.prefix) / "uv-receipt.toml").is_file():
+        return uv_tool
+    try:
+        installer = importlib.metadata.distribution("meltify").read_text("INSTALLER") or ""
+    except importlib.metadata.PackageNotFoundError:
+        installer = ""
+    if installer.strip() == "pip":
+        return pip
+    return f"{uv_tool}, or {pip}"
+
+
+def installed_extras() -> list[str]:
+    """Extras whose every package is installed, read from meltify's own requirements"""
+    try:
+        requires = importlib.metadata.requires("meltify") or []
+    except importlib.metadata.PackageNotFoundError:
+        return []
+    needed: dict[str, set[str]] = {}
+    for req in requires:
+        if (extra := re.search(r'extra == "([^"]+)"', req)) and (
+            name := re.match(r"[\w.\-]+", req)
+        ):
+            needed.setdefault(extra.group(1), set()).add(name.group(0))
+    return [x for x, names in needed.items() if x != "all" and all(map(_installed, names))]
+
+
+def _installed(name: str) -> bool:
+    try:
+        importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
 def install(extra: str, env: dict[str, str]) -> list[dict[str, Any]]:
     from meltify import safe
 
     if extra == "libreoffice":
         return [install_tool("libreoffice", env)]
+    if not launched(env):
+        # 7-Zip lands in the tools dir, which every install finds
+        return [_seven_zip(env)] if extra in ("archive", "all") else []
     uv = safe.require_binary("uv", "install uv from https://docs.astral.sh/uv/")
-    venv = data_dir(env) / "venv"
+    venv = paths.data_dir(env) / "venv"
     if not (venv / "bin" / "python").exists():
         safe.run([uv, "venv", "--quiet", "--python", "3.12", str(venv)])
     checkout = source_checkout()
@@ -336,22 +383,24 @@ def install(extra: str, env: dict[str, str]) -> list[dict[str, Any]]:
             _row("browser chrome", True, found or "Playwright Chromium", "read --render", "")
         )
     if extra in ("archive", "all"):
-        try:
-            rows.append(install_tool("7zip", env))
-        except (OSError, RuntimeError) as e:
-            # 7-Zip only adds encrypted archives, so a platform without a pinned build or a
-            # failed download must not undo the Python install above
-            rows.append(
-                _row(
-                    "install 7zip",
-                    False,
-                    error_note(e),
-                    "read archives",
-                    f"put 7zz or 7z on PATH, or rerun {SEVEN_ZIP_HINT} once online",
-                )
-            )
+        rows.append(_seven_zip(env))
     (venv / ".meltify-version").write_text(__version__, encoding="utf-8")
     return rows
+
+
+def _seven_zip(env: dict[str, str]) -> dict[str, Any]:
+    try:
+        return install_tool("7zip", env)
+    except (OSError, RuntimeError) as e:
+        # 7-Zip is only a fallback for encrypted archives, or 7z and RAR without libarchive,
+        # so a platform without a pinned build or a failed download must not undo the install
+        return _row(
+            "install 7zip",
+            False,
+            error_note(e),
+            "read archives",
+            f"put 7zz or 7z on PATH, or rerun {SEVEN_ZIP_HINT} once online",
+        )
 
 
 def probe(settings: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]:
@@ -402,7 +451,7 @@ def probe(settings: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]
             ok = r.status_code < 400
             detail = f"http {r.status_code} in {time.monotonic() - start:.1f}s"
         except Exception as e:  # noqa: BLE001
-            ok, detail = False, error_note(e, 120)
+            ok, detail = False, error_note(e, CELL_NOTE)
         rows.append(
             _row(f"probe {name}", ok, detail, "llm engines", "check the key and model name")
         )
@@ -419,10 +468,17 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
         ]
         if args.install == "libreoffice":
             env.summary = "installed libreoffice. read now renders with it"
-        else:
-            env.summary = (
-                f"installed {args.install}. The launcher now uses {data_dir(environ) / 'venv'}"
+        elif not launched(environ):
+            command = extra_command(args.install)
+            env.error(
+                MISSING,
+                f"meltify isn't running from the launcher, so --install can't add {args.install}",
+                command,
             )
+            env.summary = f"to add {args.install}, run {command}"
+        else:
+            venv = paths.data_dir(environ) / "venv"
+            env.summary = f"installed {args.install}. The launcher now uses {venv}"
         return env
     env.results = checks(settings, args.quick, environ)
     if not args.quick:

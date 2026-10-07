@@ -115,8 +115,8 @@ def _board(dirs: list[Path], now: float) -> list[dict[str, Any]]:
 
 def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
     env = Envelope(command=NAME, version=__version__)
-    conf = settings.get("brief", {})
-    root = Path(conf.get("root", "problems"))
+    conf = settings["brief"]
+    root = Path(conf["root"])
 
     if args.action == "extract":
         if not args.target:
@@ -144,9 +144,9 @@ def run(args: argparse.Namespace, settings: dict[str, Any]) -> Envelope:
         if len(existing) > 1:
             env.error(USAGE, f"problem {args.target} matches {len(existing)} folders under {root}")
             return env
-        template = files("meltify.data").joinpath(f"brief_{conf.get('template', 'en')}.md")
+        template = files("meltify.data").joinpath(f"brief_{conf['template']}.md")
         if not template.is_file():
-            env.error(USAGE, f"no brief template {conf.get('template')!r}, use en or ko")
+            env.error(USAGE, f"no brief template {conf['template']!r}, use en or ko")
             return env
         d = existing[0] if existing else root / f"{int(args.target):02d}-{_slug(args.title)}"
         _new(d, args.target, args.title, args.source, template.read_text("utf-8"))

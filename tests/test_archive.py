@@ -17,7 +17,7 @@ import pytest
 
 from meltify import converters, passwords, tools
 from meltify.cli import main
-from meltify.converters import Entry, archive
+from meltify.converters import Entry, archive, archive_backends
 from meltify.converters.run import RunContext, use
 from meltify.evidence import Src
 from tests.fixtures import make_archives as mk
@@ -216,7 +216,7 @@ def test_a_skipped_stream_member_still_charges_the_budget(monkeypatch):
 
 
 def test_spilled_member_goes_to_a_temp_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(archive, "SPILL_BYTES", 4)
+    monkeypatch.setattr(archive, "MEMBER_SPILL_BYTES", 4)
     path = mk.tar_variant(tmp_path, ".tar")
     out = archive.convert(path, Src(str(path)))
     child = out.children[0]
@@ -255,11 +255,11 @@ def test_rar_samples(tmp_path, monkeypatch, capsys):
     assert f"{solid}#att=stest2.txt" in rows
     assert rows[str(evil)]["needs"] == ["skipped up (symlink)"]
     # libarchive can't decrypt RAR, so the need names 7-Zip
-    assert rows[str(locked)]["needs"] == [archive.NEEDS_7ZIP]
+    assert rows[str(locked)]["needs"] == [archive_backends.NEEDS_7ZIP]
 
 
 def test_streamed_archive_over_the_entry_limit_is_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr(archive, "MAX_ENTRIES", 2)
+    monkeypatch.setattr(archive_backends, "MAX_ENTRIES", 2)
     path = mk.evil_tar(tmp_path)
     out = archive.convert(path, Src(str(path)))
     assert out.children == [] and out.needs == ["archive rejected: over 2 entries"]
@@ -382,7 +382,7 @@ def _7zz() -> str:
 def test_a_wrong_password_from_7zip_without_one_set_is_only_locked(monkeypatch):
     monkeypatch.delenv("MELTIFY_PASSWORD", raising=False)
     output = b"ERROR: Data Error in encrypted file. Wrong password? : a.txt"
-    assert str(archive._failure("7-Zip", output)) == passwords.LOCKED
+    assert str(archive_backends._failure("7-Zip", output)) == passwords.LOCKED
 
 
 def _seven(tmp_path: Path, name: str, *flags: str) -> Path:
@@ -427,8 +427,8 @@ def test_7zip_decrypts_with_the_password_from_stdin(tmp_path, monkeypatch, flags
         argv.append(cmd)
         return real_popen(cmd, *a, **k)
 
-    monkeypatch.setattr(archive.subprocess, "run", run)
-    monkeypatch.setattr(archive.subprocess, "Popen", popen)
+    monkeypatch.setattr(archive_backends.subprocess, "run", run)
+    monkeypatch.setattr(archive_backends.subprocess, "Popen", popen)
     assert archive.convert(path, Src(str(path))).needs == [passwords.LOCKED]
     monkeypatch.setenv("MELTIFY_PASSWORD", "not it")
     assert archive.convert(path, Src(str(path))).needs == [passwords.WRONG]
@@ -450,7 +450,7 @@ def test_7zip_stream_skips_an_oversized_member_and_reads_on(tmp_path, monkeypatc
 def test_7zip_rejects_too_many_entries(tmp_path, monkeypatch):
     path = _seven(tmp_path, "plain.7z")
     monkeypatch.setattr(archive, "libarchive_ready", lambda: False)
-    monkeypatch.setattr(archive, "MAX_ENTRIES", 2)
+    monkeypatch.setattr(archive_backends, "MAX_ENTRIES", 2)
     out = archive.convert(path, Src(str(path)))
     assert out.needs == ["archive rejected: 4 entries, over the 2 limit"]
 
@@ -496,11 +496,11 @@ def test_bsdtar_reads_rar_as_a_tar_stream(tmp_path, monkeypatch, capsys):
     _, rows = _rows(tmp_path, monkeypatch, capsys, sub, evil, locked)
     assert "1| file1" in _md(rows[f"{sub}#att=sub/dir1/file1.txt"])
     assert rows[str(evil)]["needs"] == ["skipped up (symlink)"]
-    assert rows[str(locked)]["needs"] == [archive.NEEDS_7ZIP]
+    assert rows[str(locked)]["needs"] == [archive_backends.NEEDS_7ZIP]
 
 
 def test_bsdtar_failure_reads_stderr_that_isnt_utf8():
     # A Latin-1 file name in bsdtar's message must not turn into a UnicodeDecodeError
     stderr = b"bsdtar: caf\xe9.txt: Damaged archive\nbsdtar: Error exit delayed\n"
-    e = archive._bsdtar_failure(stderr)
+    e = archive_backends._bsdtar_failure(stderr)
     assert isinstance(e, OSError) and str(e) == "bsdtar: caf�.txt: Damaged archive"

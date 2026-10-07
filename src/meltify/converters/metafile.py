@@ -154,6 +154,8 @@ class _Reader:
             return
         last = self.runs[-1] if self.runs else None
         em = max(height, last.height if last else 0)
+        # One line shares a baseline give or take half an em, and kerning may pull a glyph back
+        # a little over the one before it
         same = (
             last is not None
             and last.stream == stream
@@ -164,6 +166,7 @@ class _Reader:
             self.runs.append(_Run(stream, x, y, x + width, height, text))
             return
         gap = x - last.end
+        # A gap wider than a typical space, about a quarter em, splits two words
         space = gap > em * 0.25 and not last.text.endswith(" ") and not text.startswith(" ")
         last.text += (" " if space else "") + text
         last.end = max(last.end, x + width)
@@ -200,7 +203,7 @@ def is_emf(data: bytes) -> bool:
 def is_wmf(data: bytes) -> bool:
     if data[:4] == PLACEABLE:
         return True
-    # A standard header: memory or disk type, a 9 word header, then version 1 or 3
+    # A standard header: memory or disk type, a 9-word header, then version 1 or 3
     return (
         data[:2] in (b"\x01\x00", b"\x02\x00")
         and data[2:4] == b"\x09\x00"
@@ -216,7 +219,7 @@ def scan(data: bytes) -> Scan | None:
         if is_wmf(data):
             return _wmf(data)
     except struct.error:
-        # Records are bounds checked, so this is a header too short to hold its fields
+        # Records are bounds-checked, so this is a header too short to hold its fields
         return None
     return None
 

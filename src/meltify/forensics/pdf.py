@@ -143,13 +143,16 @@ def scan_page(
     import pymupdf
 
     marks = marks or Marks(page)
-    drawn = [d for d in page.get_drawings() if d.get("fill")]
+    spans = [(s, "".join(chr(ch[0]) for ch in s["chars"]).strip()) for s in marks.trace]
+    spans = [(s, text) for s, text in spans if text]
+    if not spans:
+        return
+    # The raw tuples, since get_drawings wraps every path and point of a vector-heavy page
+    # in Rect and Point objects
+    drawn = [d for d in page.get_cdrawings() if d.get("fill")]
     fills = Boxes([(d["seqno"], *d["rect"]) for d in drawn])
     colors = [d["fill"] for d in drawn]
-    for s in marks.trace:
-        text = "".join(chr(ch[0]) for ch in s["chars"]).strip()
-        if not text:
-            continue
+    for s, text in spans:
         rect, seq = pymupdf.Rect(s["bbox"]), s["seqno"]
         behind = np.flatnonzero((fills.seq < seq) & fills.contain(rect))
         bg = luminance(colors[behind[-1]]) if len(behind) else 1.0

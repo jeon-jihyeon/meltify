@@ -47,6 +47,50 @@ def test_scan_with_an_ocr_layer_is_not_read_twice(tmp_path, under):
     assert layer in out.blocks[0].text
 
 
+def test_logo_on_most_pages_is_skipped_but_keeps_figure_numbers(tmp_path):
+    import pymupdf
+
+    doc = pymupdf.open()
+    logo = None
+    for n in range(4):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Quarterly report page {n + 1} with its body text")
+        if n < 3:
+            box = pymupdf.Rect(400, 20, 520, 140)
+            if logo is None:
+                logo = page.insert_image(box, stream=card("LOGO", (240, 240)))
+            else:
+                page.insert_image(box, xref=logo)
+        if n in (1, 3):
+            page.insert_image(pymupdf.Rect(50, 200, 500, 500), stream=card(f"FIG {n}", (900, 600)))
+    doc.save(tmp_path / "r.pdf")
+    out = pdf.convert(tmp_path / "r.pdf", Src("r.pdf"))
+    # The figure is still the page's second image, though the logo before it isn't read
+    assert [j.src.cite() for j in out.jobs] == ["r.pdf#p2#img2", "r.pdf#p4#img1"]
+
+
+def test_scan_pages_never_hash_their_images(tmp_path, monkeypatch):
+    import pymupdf
+
+    doc = pymupdf.open()
+    for n in range(3):
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=card(f"SCANNED BODY {n}", (850, 1100)))
+    doc.save(tmp_path / "s.pdf")
+    hashed = []
+    original = pymupdf.Page.get_image_info
+
+    def info(page, hashes=False, xrefs=False):
+        if hashes or xrefs:
+            hashed.append(page.number)
+        return original(page, hashes=hashes, xrefs=xrefs)
+
+    monkeypatch.setattr(pymupdf.Page, "get_image_info", info)
+    out = pdf.convert(tmp_path / "s.pdf", Src("s.pdf"))
+    assert [j.kind for j in out.jobs] == ["page"] * 3
+    assert hashed == []
+
+
 def test_annotation_comments_are_cited_where_they_sit(tmp_path):
     import pymupdf
 

@@ -10,13 +10,18 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from meltify import tools
 from meltify.converters import quicklook
 from meltify.converters.run import LOCK, workdir
 from meltify.safe import run
+
+if TYPE_CHECKING:
+    from meltify.converters import Converted
+    from meltify.evidence import Src
 
 # Where the macOS app keeps the binary when it isn't linked onto PATH
 MAC_SOFFICE = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
@@ -220,6 +225,35 @@ def to_pdf(path: Path, *, out_dir: Path | None = None, timeout: float = TIMEOUT)
     if pdf is None and managed:
         shutil.rmtree(folder, ignore_errors=True)
     return pdf
+
+
+def read_rendered(
+    path: Path,
+    src: Src,
+    draw: Callable[[Path, Path], Path | None],
+    kind: str,
+    prefix: str = "meltify-render-",
+) -> Converted | None:
+    """`path` drawn into a PDF by `draw`, then read like one, or None when nothing was drawn
+
+    pdf cites through the src it's given, so pages cite as `a.wpd#p2`. Only PyMuPDF needs
+    the lock, so a slow renderer doesn't hold up other PDFs
+    """
+    from meltify.converters import pdf
+
+    folder = workdir(prefix)
+    out = None
+    try:
+        rendered = draw(path, folder)
+        if rendered is not None:
+            with LOCK:
+                out = pdf.convert(rendered, src)
+            out.kind = kind
+        return out
+    finally:
+        # The OCR stage opens the rendered PDF for image-only pages, so then it has to stay
+        if out is None or not any(job.path is not None for job in out.jobs):
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def png(

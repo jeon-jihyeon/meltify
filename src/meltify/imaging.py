@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -142,6 +143,27 @@ class Look:
         return (
             hamming(self.shape, other.shape) <= distance and abs(self.tone - other.tone) < tone_gap
         )
+
+
+def distinct_frames(
+    paths: Iterable[Path], distance: int, keep_repeats: bool = False
+) -> Iterator[tuple[Path, Path | None]]:
+    """Each video frame let through, with the earlier frame it repeats or None
+
+    Only the last frame let through counts, so a scene that returns later shows up again.
+    Repeats are dropped unless `keep_repeats`
+    """
+    from PIL import Image
+
+    last: tuple[Look, Path] | None = None
+    for path in paths:
+        with Image.open(path) as im:
+            look = Look.of(im)
+        repeats = last[1] if last is not None and look.same_as(last[0], distance) else None
+        if repeats is not None and not keep_repeats:
+            continue
+        last = (look, path)
+        yield path, repeats
 
 
 def frames(path: Path) -> tuple[list[int], int]:

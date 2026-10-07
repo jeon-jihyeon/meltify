@@ -1,0 +1,34 @@
+name: Bug report
+description: Something meltify read wrong, skipped or crashed on
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got instead.
+      placeholder: |
+        meltify read ./inputs --json
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The file type and where it came from. Attach a small sample that reproduces it if you can share one, and never attach anything private.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The table or `--json` output, and any warning or error lines.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: meltify doctor --json
+      description: Paste the output of `meltify doctor --json`. It lists versions, engines and tools, and never prints key values. It does show local paths, so replace your home folder and user name with `~` before you paste.
+      render: json
+    validations:
+      required: true

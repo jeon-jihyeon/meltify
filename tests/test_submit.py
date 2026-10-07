@@ -240,6 +240,7 @@ def test_policy_reads_config():
         until_score=None, max_attempts=None, deadline="2026-10-31T14:50", idle_exit=None,
     )  # fmt: skip
     conf = {"url": "u", "gap": 2.0, "mode": "json", "field": "f", "score_path": "s", "goal": "min",
-            "until_score": "", "max_attempts": 0, "idle_exit": 0.0}  # fmt: skip
+            "until_score": "", "max_attempts": 0, "idle_exit": 0.0, "auth_env": "", "deadline": "",
+            "max_errors": 5}  # fmt: skip
     p = _policy(args, conf)
     assert p.url == "u" and p.until_score is None and p.deadline is not None

@@ -47,6 +47,16 @@ def test_token_mode_compares_words():
     assert got["here"] is True and got["STOP"] is False and got["ST0P"] is False
 
 
+def test_each_value_cites_the_first_box_with_a_bbox_in_engine_order():
+    a = EngineReading("a", LOCAL, [TextBox("1,250 and 7"), TextBox("１,250", (1, 1, 2, 2))])
+    b = EngineReading(
+        "b", LOCAL, [TextBox("7 then 9", (5, 5, 6, 6)), TextBox("1,250", (3, 3, 4, 4))]
+    )
+    got = {v.value: v.bbox for v in compare([a, b])}
+    assert got == {"1,250": (1, 1, 2, 2), "7": (5, 5, 6, 6), "9": (5, 5, 6, 6)}
+    assert [v.bbox for v in compare([EngineReading("c", LOCAL, [TextBox("42")])])] == [None]
+
+
 def test_target_maps_back_to_original_units():
     img = Target(None, "menu.png", None, 3, 1 / 3, "px")
     assert img.src((30, 60, 90, 120)).cite() == "menu.png@px(10,20,30,40)"
@@ -201,3 +211,46 @@ def test_vision_reads_korean_menu(tmp_path):
     text = " ".join(b.text for b in boxes)
     assert "655" in text and "820" in text
     assert all(b.bbox and 0 <= b.bbox[0] < b.bbox[2] <= 420 for b in boxes)
+
+
+def test_non_image_input_is_a_usage_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["x"])])
+    notes = tmp_path / "notes.txt"
+    notes.write_text("not an image")
+    assert main(["ocr", str(notes), "--json"]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert "notes.txt isn't an image or a PDF" in out["errors"][0]["message"]
+
+
+def test_lang_flag_reaches_the_engines(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    seen = []
+    monkeypatch.setattr(
+        engines, "select", lambda spec, s: seen.append(s["lang"]) or [Fake("vision", ["x"])]
+    )
+    assert main(["ocr", str(_menu(tmp_path / "m.png")), "--lang", "de"]) == 0
+    assert seen == ["de"]
+
+
+def test_lang_flag_is_lowercased_and_checked(tmp_path, monkeypatch, capsys):
+    from meltify import lang
+
+    assert lang.code(" EN ") == "en"
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        main(["ocr", "m.png", "--lang", "english"])
+    assert e.value.code == 2
+    assert "unknown language 'english', use one of ko, en" in capsys.readouterr().err
+
+
+def test_a_library_value_error_keeps_its_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["x"])])
+    (tmp_path / "mine.txt").write_bytes(b"\xff\xfe bad utf-8 \xc3")
+    assert (
+        main(["ocr", str(_menu(tmp_path / "m.png")), "--reading", "agent=mine.txt", "--json"]) == 2
+    )
+    assert json.loads(capsys.readouterr().out)["errors"][0]["message"].startswith(
+        "UnicodeDecodeError: "
+    )

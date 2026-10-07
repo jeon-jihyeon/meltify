@@ -14,42 +14,38 @@ import hashlib
 import io
 import json
 import os
-import re
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from meltify import paths
+from meltify.config import pick
 from meltify.converters import Block, RecognizeJob
 from meltify.engines.asr import Segment
-from meltify.engines.consensus import EngineReading, compare
+from meltify.engines.consensus import EngineReading, compare, disputed_row, tally
 from meltify.engines.ocr import TextBox
-from meltify.evidence import Src, clock, coordinate, finding
+from meltify.evidence import Src, clock, coordinate
+from meltify.files import safe_name
+from meltify.needs import ITEM_NOTE
 from meltify.safe import MissingTool, attempt
 
-# Body text comes from the first engine here that read anything, then the rest in order
-BODY_ORDER = ("vision", "paddle")
-# Raised when no engine was found at all, which the run already warned about once
+# MissingTool names raised when no engine was found at all, which the run already warned
+# about once
 NO_ENGINE = ("ocr engine", "speech engine")
 CACHE_VERSION = 1
+# A model name goes into cache file names beside a 64-char hash, so only its tail is kept
+MODEL_TAIL = 48
 # Workers for uncached content. Image prep and Vision overlap well, and more of them would
 # only queue on the engines that take one job at a time
 WORKERS = 4
-# Engines safe to call from several threads at once. Vision builds its own request per call,
-# while Paddle and the speech models keep one stateful model per instance
-SHARED = {"vision"}
 
 Box = tuple[float, float, float, float]
-
-
-def cache_root() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "meltify"
 
 
 @dataclass(frozen=True)
@@ -67,6 +63,34 @@ class Options:
     tile_max: int = 2576
     scene: float = 0.3
     dedup_distance: int = 4
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Mapping[str, Any],
+        *,
+        engines: str | None = None,
+        asr: str | None = None,
+        budget: float | None = None,
+        frames: int | None = None,
+        refresh: bool = False,
+    ) -> Options:
+        """Options from the merged settings, where a flag left as None takes the setting"""
+        read, ocr, media = settings["read"], settings["ocr"], settings["media"]
+        return cls(
+            engines=str(pick(engines, ocr["engines"])),
+            asr=str(pick(asr, settings["asr"]["engine"])),
+            lang=str(settings["lang"]),
+            asr_lang=str(settings["asr"]["lang"]),
+            budget=float(pick(budget, read["budget"])),
+            frames=int(pick(frames, read["frames"])),
+            refresh=refresh,
+            dpi=int(ocr["dpi"]),
+            sharpen=bool(ocr["sharpen"]),
+            tile_max=int(ocr["tile_max"]),
+            scene=float(media["scene"]),
+            dedup_distance=int(media["dedup_distance"]),
+        )
 
 
 @dataclass
@@ -103,7 +127,7 @@ class Cache:
         self.refresh = refresh
 
     def path(self, kind: str, sha: str, engine: str, lang: str, prep: str) -> Path:
-        name = re.sub(r"[^\w.\-]+", "_", f"{sha}-{engine}-{lang}-{prep}")
+        name = safe_name(f"{sha}-{engine}-{lang}-{prep}")
         return self.root / kind / sha[:2] / f"{name}.json"
 
     def get(self, *key: str) -> dict[str, Any] | None:
@@ -164,7 +188,7 @@ class Recognizer:
     ) -> None:
         self.opts = opts
         self.settings = settings
-        self.cache = Cache(cache_root(), opts.refresh)
+        self.cache = Cache(paths.cache_dir(), opts.refresh)
         self.warned: set[str] = set()
         self._warn = warn
         self._ocr: list[Any] | None = None
@@ -191,8 +215,9 @@ class Recognizer:
 
     def _one_at_a_time(self, engine: Any) -> Any:
         """The engine's lock, or a no-op for engines safe across threads"""
-        from meltify.engines.ocr import REMOTE
+        from meltify.engines.ocr import REMOTE, SHARED
 
+        # Speech models keep one stateful model per instance, so they always take the lock
         if engine.name in SHARED or getattr(engine, "kind", None) == REMOTE:
             return contextlib.nullcontext()
         return self._locks.setdefault(engine.name, threading.Lock())
@@ -203,18 +228,27 @@ class Recognizer:
         if self._ocr is None:
             from meltify.engines import ocr as engines
 
-            chosen = engines.select(self.opts.engines, self.settings)
-            for e in chosen:
-                if (why := e.missing()) is not None:
-                    raise MissingTool(e.name, why)
-            rank = {n: i for i, n in enumerate(BODY_ORDER)}
+            chosen = engines.ready(self.opts.engines, self.settings)
+            # Body text comes from the first local engine that read anything, then the rest
+            # in the order named
+            rank = {n: i for i, n in enumerate(engines.LOCAL_ENGINES)}
             self._ocr = sorted(chosen, key=lambda e: rank.get(e.name, len(rank)))
             if not chosen:
                 self.warn(
-                    "no local OCR engine, so images stay listed as needs. pip install ocrmac"
-                    " on macOS, meltify doctor --install ocr-paddle elsewhere, or --engines NAME"
+                    "no local OCR engine, so images stay listed as needs."
+                    f" {engines.INSTALL_HINT}, or --engines NAME"
                 )
         return self._ocr
+
+    def check_named(self, ocr: bool, asr: bool) -> None:
+        """Raise MissingTool now for an engine the command line named, before anything is written
+
+        Engines named only in a config file stay lazy, so a run with nothing to OCR still works
+        """
+        if ocr and self.opts.engines != "auto":
+            self.ocr_engines()
+        if asr and self.opts.asr != "auto":
+            self.asr_engine()
 
     def asr_engine(self) -> Any:
         if not self._asr_ready:
@@ -335,7 +369,7 @@ class Recognizer:
             return True
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             # ffmpeg may refuse a file ffprobe opened, and that must not end the whole run
-            self.warn(f"can't read {where}: {e}"[:300])
+            self.warn(f"can't read {where}: {e}"[:ITEM_NOTE])
             for i in members:
                 outcomes[i].left = "failed"
             return True
@@ -380,7 +414,7 @@ class Recognizer:
 
         chosen = self.ocr_engines()
         if not chosen:
-            raise MissingTool("ocr engine", "pip install ocrmac, or --engines NAME")
+            raise MissingTool("ocr engine", f"{engines.INSTALL_HINT}, or --engines NAME")
         lang, prep = self.opts.lang, self._prep(kind == "page")
         size: tuple[int, int] | None = None
         readings: dict[str, EngineReading] = {}
@@ -409,9 +443,7 @@ class Recognizer:
             prep_path = imaging.save(prepared, work / "prepared.png")
             for e in missing:
                 if isinstance(e, engines.Remote):
-                    from meltify.commands.ocr import read_tiles
-
-                    got = attempt(read_tiles, e, prepared, self.opts.tile_max, work)
+                    got = attempt(engines.read_tiles, e, prepared, self.opts.tile_max, work)
                 else:
                     with self._one_at_a_time(e):
                         got = attempt(e.recognize, prep_path, prepared.size)
@@ -440,7 +472,7 @@ class Recognizer:
 
     def _asr_prep(self, engine: Any) -> str:
         model = str(getattr(engine, "model", "") or "default")
-        return Path(model).name[-48:]
+        return Path(model).name[-MODEL_TAIL:]
 
     def speech(
         self, sha: str, path: Path | None, where: str, compute: bool
@@ -457,7 +489,7 @@ class Recognizer:
             return None
         assert path is not None
         segments: list[Segment] = []
-        if _has_audio(path):
+        if ffmpeg.has_audio(path):
             work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
             wav = ffmpeg.audio(path, work / "audio.wav", ffmpeg.Window())
             with self._one_at_a_time(engine):
@@ -504,22 +536,12 @@ class Recognizer:
 
     def _shots(self, path: Path) -> tuple[list[float], list[tuple[float, str, Path]]]:
         """Scene times, and up to `frames` distinct frames spread across them"""
-        from PIL import Image
-
         from meltify import ffmpeg, imaging
 
         folder = Path(tempfile.mkdtemp(prefix="frames-", dir=self.tmp))
-        found = ffmpeg.scene_frames(path, folder, self.opts.scene, ffmpeg.Window())
-        kept: list[tuple[Path, float]] = []
-        last = None
-        for file, t in found:
-            with Image.open(file) as im:
-                look = imaging.Look.of(im)
-            # A scene that returns later still counts, so only compare with the last kept frame
-            if last is not None and look.same_as(last, self.opts.dedup_distance):
-                continue
-            last = look
-            kept.append((file, t))
+        found = dict(ffmpeg.scene_frames(path, folder, self.opts.scene, ffmpeg.Window()))
+        distinct = imaging.distinct_frames(found, self.opts.dedup_distance)
+        kept = [(file, found[file]) for file, _ in distinct]
         scenes = [t for _, t in kept]
         n = self.opts.frames
         if n <= 0:
@@ -566,18 +588,8 @@ class Recognizer:
             for v in compare(pic.readings, "numbers"):
                 if v.agreed:
                     continue
-                counts = ", ".join(f"{n} {c}" for n, c in v.counts.items())
-                lines.append(f"> disputed {v.value}: {counts}")
-                disputed.append(
-                    finding(
-                        place(v.bbox),
-                        kind="disputed",
-                        type="disputed",
-                        value=v.value,
-                        counts=v.counts,
-                        text=f"{v.value}  ({counts})",
-                    )
-                )
+                lines.append(f"> disputed {v.value}: {tally(v)}")
+                disputed.append(disputed_row(place(v.bbox), v, kind="disputed"))
         return Outcome([Block(base, "\n".join(lines))], disputed)
 
     def _speech_outcome(self, src: Src, segments: list[Segment]) -> Outcome:
@@ -615,17 +627,3 @@ def _open_flat(path: Path) -> Any:
 
     with Image.open(path) as im:
         return imaging.flatten(im)
-
-
-def _has_audio(path: Path) -> bool:
-    from meltify.ffmpeg import HINT
-    from meltify.safe import require_binary, run
-
-    probe = require_binary("ffprobe", HINT)
-    out = run(
-        [
-            probe, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
-            "-of", "csv=p=0", "-i", str(path.resolve()),
-        ]
-    )  # fmt: skip
-    return bool(out.stdout.strip())

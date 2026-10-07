@@ -1,5 +1,6 @@
-"""Word and PowerPoint packages: markitdown's text cited by paragraph or slide, plus the
-pictures, charts and diagrams each one shows
+"""Word and PowerPoint packages, cited by paragraph or slide
+
+markitdown reads the text, and the pictures, charts and diagrams each one shows come along
 """
 
 from __future__ import annotations
@@ -212,7 +213,7 @@ def _text_copy(path: Path, part: str, out: Path) -> None:
 
     A part whose numbers can't be written stays as it is. Footnotes and endnotes continue the
     count after the body, the order mammoth adds them in. Pictures in the media folder go
-    empty, since mammoth base64 encodes each one into a data URI that markitdown cuts back
+    empty, since mammoth base64-encodes each one into a data URI that markitdown cuts back
     to its type, and docx_images reads them from the original
     """
     with zipfile.ZipFile(path) as z:

@@ -165,7 +165,7 @@ def test_a_read_run_leaves_no_temp_dirs_behind(tmp_path, monkeypatch, capsys):
 
     import pymupdf
 
-    from meltify.commands import read
+    from meltify import melt
     from meltify.converters import archive, doc, ppt, render
     from meltify.engines.ocr import LOCAL, TextBox
     from tests.fixtures.make_archives import tar_variant
@@ -201,8 +201,8 @@ def test_a_read_run_leaves_no_temp_dirs_behind(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(doc, "convert_to", lambda p, target, out_dir, timeout: two_pages(
         out_dir / f"{p.stem}.pdf"))  # fmt: skip
     # Spill every member to disk, and stop nesting before the spilled one is moved out
-    monkeypatch.setattr(archive, "SPILL_BYTES", 4)
-    monkeypatch.setattr(read, "MAX_DEPTH", 0)
+    monkeypatch.setattr(archive, "MEMBER_SPILL_BYTES", 4)
+    monkeypatch.setattr(melt, "MAX_DEPTH", 0)
     monkeypatch.setenv("MELTIFY_PASSWORD", secret)
 
     inputs = tmp_path / "in"
@@ -327,7 +327,8 @@ def test_archive_members_melt_side_by_side_with_stable_names(tmp_path, monkeypat
         z.writestr("d0/f0.txt.md", "a name that flattens near another\n")
         z.write(inner, "nested/inner.zip")
     runs = {}
-    for jobs in ("4", "1"):
+    # 0 runs one file at a time like 1, instead of falling back to read.jobs
+    for jobs in ("4", "1", "0"):
         state["peak"] = 0
         monkeypatch.chdir(tmp_path)
         code = main(["read", str(path), "--json", "--limit", "0", "--jobs", jobs,
@@ -335,13 +336,13 @@ def test_archive_members_melt_side_by_side_with_stable_names(tmp_path, monkeypat
         assert code == 0
         rows = json.loads(capsys.readouterr().out)["results"]
         runs[jobs] = (_outputs(rows), [r["cite"] for r in rows], state["peak"])
-    assert runs["4"][2] > 1 and runs["1"][2] == 1
-    assert runs["4"][:2] == runs["1"][:2]
+    assert runs["4"][2] > 1 and runs["1"][2] == runs["0"][2] == 1
+    assert runs["4"][:2] == runs["1"][:2] == runs["0"][:2]
     assert f"{path}#att=nested/inner.zip#att=deep.txt" in runs["4"][1]
 
 
 def test_pdfs_convert_in_worker_processes_with_the_same_output(tmp_path, monkeypatch, capsys):
-    from meltify.commands import read
+    from meltify import pdfpool
     from tests.fixtures.make_docs import embedded_pdf
 
     folder = tmp_path / "in"
@@ -350,14 +351,14 @@ def test_pdfs_convert_in_worker_processes_with_the_same_output(tmp_path, monkeyp
     hidden_pdf(folder / "hidden.pdf")
     (folder / "broken.pdf").write_bytes(b"%PDF-1.4 cut short")
     used = []
-    real_close = read.PdfPool.close
+    real_close = pdfpool.PdfPool.close
 
     def close(self):
         used.append(self.executor is not None and not self.broken)
         real_close(self)
 
-    monkeypatch.setattr(read, "_spawn_safe", lambda: True)
-    monkeypatch.setattr(read.PdfPool, "close", close)
+    monkeypatch.setattr(pdfpool, "_spawn_safe", lambda: True)
+    monkeypatch.setattr(pdfpool.PdfPool, "close", close)
     monkeypatch.chdir(tmp_path)
     runs = {}
     for jobs in ("2", "1"):
@@ -366,7 +367,8 @@ def test_pdfs_convert_in_worker_processes_with_the_same_output(tmp_path, monkeyp
         assert code == 0
         rows = json.loads(capsys.readouterr().out)["results"]
         runs[jobs] = (_outputs([r for r in rows if r.get("out")]), rows)
-    # Only the run with more than one job starts the pool, and its processes read every PDF
+    # Only the run with more than one job starts the pool, and its processes read the PDFs
+    # after the first
     assert used == [True]
     assert runs["2"][0] == runs["1"][0]
     errors = {Path(r["cite"]).name: r.get("error") for r in runs["2"][1]}
@@ -380,14 +382,17 @@ def test_pdfs_convert_in_worker_processes_with_the_same_output(tmp_path, monkeyp
 def test_pdf_pool_hands_back_what_it_cant_take(tmp_path, monkeypatch):
     from concurrent.futures.process import BrokenProcessPool
 
-    from meltify.commands import read
+    from meltify import pdfpool
     from meltify.converters import pdf
     from meltify.evidence import Src
 
-    pool = read.PdfPool(1)
+    pool = pdfpool.PdfPool(1)
     # A swapped in converter may not pickle, so it stays in this process
     assert pool.convert(lambda p, s: None, tmp_path / "a.pdf", Src("a.pdf")) is None
     assert pool.executor is None
+    # The run's first PDF goes back to the lock too, so one PDF never starts a worker
+    assert pool.convert(pdf.convert, tmp_path / "a.pdf", Src("a.pdf")) is None
+    assert pool.executor is None and not pool.broken
 
     class Broken:
         def submit(self, *a, **k):
@@ -396,3 +401,65 @@ def test_pdf_pool_hands_back_what_it_cant_take(tmp_path, monkeypatch):
     monkeypatch.setattr(pool, "_executor", lambda: Broken())
     assert pool.convert(pdf.convert, tmp_path / "a.pdf", Src("a.pdf")) is None
     assert pool.broken
+
+
+def test_a_rerun_into_the_same_folder_drops_what_only_the_last_run_wrote(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.txt").write_text("alpha\n")
+    (tmp_path / "b.txt").write_text("beta\n")
+    mail = nested_mail(tmp_path / "m.eml", 1)
+    out = tmp_path / "out" / "read"
+    out.mkdir(parents=True)
+    mine = out / "notes.md"
+    mine.write_text("a person's own file\n")
+
+    assert main(["read", "a.txt", "b.txt", str(mail), "--out", "out", "--json"]) == 0
+    capsys.readouterr()
+    before = {p.name for p in out.glob("*.md")}
+    assert {"a.txt.md", "b.txt.md", "m.eml.md"} <= before
+    assert (out / "attachments" / "m.eml").is_dir()
+
+    assert main(["read", "a.txt", "--out", "out", "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)["results"]
+    assert [Path(r["out"]).name for r in rows] == ["a.txt.md"]
+    assert {p.name for p in out.glob("*.md")} == {"a.txt.md", "notes.md"}
+    assert not (out / "attachments" / "m.eml").exists()
+    assert mine.read_text() == "a person's own file\n"
+
+    # A crashed run's markdown isn't in any index, and an item that fails keeps its last good one
+    (out / "ghost.md").write_text("<!-- meltify source: gone.txt -->\n")
+    (tmp_path / "a.txt").chmod(0)
+    try:
+        # Twice, since the second failure no longer has a good run in the index before it
+        for _ in range(2):
+            assert main(["read", "a.txt", "--out", str(tmp_path / "out"), "--json"]) == 0
+            [row] = json.loads(capsys.readouterr().out)["results"]
+            assert row["error"] and row["out"] is None
+            assert {p.name for p in out.glob("*.md")} == {"a.txt.md", "notes.md"}
+    finally:
+        (tmp_path / "a.txt").chmod(0o644)
+
+    # A run that finds nothing to read leaves the folder as it was
+    (tmp_path / "empty").mkdir()
+    assert main(["read", "empty", "--out", "out", "--json"]) == 0
+    capsys.readouterr()
+    assert {p.name for p in out.glob("*.md")} == {"a.txt.md", "notes.md"}
+
+
+def test_a_render_standing_in_for_a_missing_extra_keeps_its_hint(tmp_path, monkeypatch):
+    from meltify.converters import Converted, fallback, unlock
+    from meltify.evidence import Src
+    from meltify.melt import Reader
+    from meltify.safe import MissingTool
+
+    def convert(path, src):
+        raise MissingTool("office extra", "meltify doctor --install office")
+
+    monkeypatch.setattr(unlock, "sealed", lambda path: False)
+    monkeypatch.setattr(fallback, "convert", lambda path, src, why: Converted("xls", needs=[why]))
+    row = {"kind": "xls"}
+    out = Reader(tmp_path, {})._convert(convert, tmp_path / "a.xls", Src("a.xls"), row)
+    assert out.needs == ["office extra", "office extra"]
+    assert row["hint"] == "meltify doctor --install office"

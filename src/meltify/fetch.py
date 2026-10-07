@@ -1,8 +1,8 @@
 """Download a URL safely so `read` can melt it like a local file
 
-Media URLs go to `media`, pages and documents are saved under a per-URL cache folder.
-Every hop is checked against private addresses, and the connection is pinned to the
-address that passed the check, so DNS rebinding can't swap it afterwards
+Media URLs go to `media`, while pages and documents are saved under a per-URL cache
+folder. Every hop is checked against private addresses, and the connection is pinned to
+the address that passed the check, so DNS rebinding can't swap it afterwards
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import httpcore
 import httpx
 
 from meltify import __version__
+from meltify.files import SEVEN_ZIP_MAGIC, safe_name
 
 USER_AGENT = f"meltify/{__version__} (+https://github.com/jeon-jihyeon/meltify)"
 MAX_REDIRECTS = 5
@@ -56,7 +57,7 @@ MAGIC = (
     (b"\xff\xd8\xff", ".jpg"),
     (b"GIF87a", ".gif"),
     (b"GIF89a", ".gif"),
-    (b"7z\xbc\xaf\x27\x1c", ".7z"),
+    (SEVEN_ZIP_MAGIC, ".7z"),
     (b"SQLite format 3\x00", ".sqlite"),
     (b"{\\rtf", ".rtf"),
 )
@@ -127,6 +128,15 @@ def _check(url: httpx.URL, allow_private: bool) -> None:
     _resolve(url.host, url.port or (443 if url.scheme == "https" else 80), allow_private)
 
 
+def check_url(url: str, allow_private: bool) -> None:
+    """Raise ValueError unless the URL is http(s) and every address it resolves to is allowed"""
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as e:
+        raise ValueError(f"bad URL {url}: {e}") from None
+    _check(parsed, allow_private)
+
+
 class _PinnedBackend(httpcore.SyncBackend):
     # Connect to an address that passed the check, so a second DNS answer can't redirect us
     def __init__(self, allow_private: bool) -> None:
@@ -140,8 +150,11 @@ class _PinnedBackend(httpcore.SyncBackend):
 def _client(allow_private: bool) -> httpx.Client:
     transport = httpx.HTTPTransport()
     pool = getattr(transport, "_pool", None)
-    if pool is not None and hasattr(pool, "_network_backend"):
-        pool._network_backend = _PinnedBackend(allow_private)
+    # Without the pin a request would already be on its way before the peer check, so an httpx
+    # release that moves this attribute has to fail loudly instead of fetching unguarded
+    if pool is None or not hasattr(pool, "_network_backend"):
+        raise RuntimeError("this httpx version can't pin addresses, so meltify won't fetch URLs")
+    pool._network_backend = _PinnedBackend(allow_private)
     # Proxies from the environment would make the peer check see the proxy, not the site
     return httpx.Client(
         transport=transport,
@@ -237,7 +250,7 @@ def _cache_dir(url: str, out_dir: Path) -> Path:
 
 def _stem(url: httpx.URL) -> str:
     name = PurePosixPath(url.path).name
-    stem = re.sub(r"[^\w.\-]+", "_", PurePosixPath(name).stem)[:60].strip("._")
+    stem = safe_name(PurePosixPath(name).stem)[:60].strip("._")
     return stem or "index"
 
 
@@ -396,6 +409,8 @@ def _store(r: httpx.Response, url: httpx.URL, folder: Path, max_bytes: int, dead
         raise
     ctype = r.headers.get("content-type", "")
     kind, suffix = classify(ctype, head, url, r.headers.get("content-disposition", ""))
+    # Clear out the earlier fetch, whose copy may carry another suffix and whose render no
+    # longer matches
     for old in folder.iterdir():
         if old != part:
             old.unlink()

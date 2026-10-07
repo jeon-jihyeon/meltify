@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
-# Codes for Apple Vision, PaddleOCR, Whisper and subtitles, in that order
+# Codes for Apple Vision, PaddleOCR and Whisper, in that order
 CODES = {
-    "ko": ("ko-KR", "korean", "ko", "ko"),
-    "en": ("en-US", "en", "en", "en"),
-    "ja": ("ja-JP", "japan", "ja", "ja"),
-    "zh": ("zh-Hans", "ch", "zh", "zh-Hans"),
-    "de": ("de-DE", "german", "de", "de"),
-    "fr": ("fr-FR", "french", "fr", "fr"),
-    "es": ("es-ES", "es", "es", "es"),
+    "ko": ("ko-KR", "korean", "ko"),
+    "en": ("en-US", "en", "en"),
+    "ja": ("ja-JP", "japan", "ja"),
+    "zh": ("zh-Hans", "ch", "zh"),
+    "de": ("de-DE", "german", "de"),
+    "fr": ("fr-FR", "french", "fr"),
+    "es": ("es-ES", "es", "es"),
 }
 
 
-def _row(lang: str) -> tuple[str, str, str, str]:
-    return CODES.get(lang, (lang, lang, lang, lang))
+def code(raw: str) -> str:
+    """A --lang value checked against the codes every engine maps, for argparse"""
+    import argparse
+
+    lang = raw.strip().lower()
+    if lang not in CODES:
+        raise argparse.ArgumentTypeError(f"unknown language {raw!r}, use one of {', '.join(CODES)}")
+    return lang
+
+
+def _row(lang: str) -> tuple[str, str, str]:
+    return CODES.get(lang, (lang, lang, lang))
 
 
 def vision(lang: str) -> list[str]:
@@ -30,7 +40,3 @@ def paddle(lang: str) -> str:
 
 def whisper(lang: str) -> str | None:
     return None if lang == "auto" else _row(lang)[2]
-
-
-def subtitles(lang: str) -> str:
-    return _row(lang)[3]
