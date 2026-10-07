@@ -306,3 +306,13 @@ def test_peer_address_is_checked_after_connect() -> None:
     with pytest.raises(ValueError, match="non-public 10.0.0.5"):
         fetch_mod._peer_ok(r, allow_private=False)
     fetch_mod._peer_ok(r, allow_private=True)
+
+
+def test_a_client_that_cant_pin_addresses_refuses_to_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The pin hooks into httpx internals, so a release that moves them must not fetch unguarded
+    with fetch_mod._client(False) as client:
+        pool = client._transport._pool  # type: ignore[attr-defined]
+        assert isinstance(pool._network_backend, fetch_mod._PinnedBackend)
+    monkeypatch.setattr(httpx.HTTPTransport, "__init__", lambda self, *a, **k: None)
+    with pytest.raises(RuntimeError, match="can't pin addresses"):
+        fetch_mod._client(False)

@@ -87,7 +87,7 @@ def _points(el: ET.Element | None, resolve: Resolve | None) -> list[str] | None:
     """Cached points of a series part, or the cells its formula names when nothing is cached"""
     if el is None:
         return None
-    # Multi level categories list the innermost level first
+    # Multi-level categories list the innermost level first
     scope = el.find(".//c:lvl", NS)
     scope = el if scope is None else scope
     values = {integer(pt.get("idx")): pt.findtext("c:v", "", NS) for pt in scope.iter(POINT)}
@@ -310,7 +310,7 @@ def render_charts(
 ) -> None:
     """Crop charts that saved no values out of a render of the file for OCR
 
-    A render with other than the `pages` expected would put every crop on the wrong chart
+    A render whose page count isn't `pages` would put every crop on the wrong chart
     """
     from meltify.converters import render
 

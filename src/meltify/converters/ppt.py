@@ -1,7 +1,8 @@
 """PowerPoint 97 to 2003 binaries: slide text and pictures straight from the records
 
-Templates and slideshows (.pot, .pps) share the deck's format. LibreOffice only steps in
-for PowerPoint 95 and decks the records can't be followed in
+Templates and slideshows (.pot, .pps) share the deck's format. LibreOffice steps in for
+PowerPoint 95, decks the records can't be followed in, decks read without olefile, and
+slides with no text or pictures to OCR
 """
 
 from __future__ import annotations
@@ -418,20 +419,12 @@ def convert(path: Path, src: Src) -> Converted:
 
 
 def _rendered(path: Path, src: Src) -> Converted:
-    from meltify.converters import pdf, render
+    from meltify.converters import render
 
-    tmp = run.workdir("meltify-ppt-")
-    out = None
-    try:
-        # Recorded as drawn from the ppt, so its image-only pages hit the OCR cache next run
-        rendered = render.soffice_pdf(path, tmp, SOFFICE_TIMEOUT)
-        # Slides become PDF pages, and pdf cites through the src it's given, so cites stay
-        # `a.ppt#p2`. Only PyMuPDF needs the lock, so soffice doesn't hold up other PDFs
-        with run.LOCK:
-            out = pdf.convert(rendered, src)
-        out.kind = "legacy"
-        return out
-    finally:
-        # The OCR stage opens the rendered PDF for image-only slides, so then it has to stay
-        if out is None or not any(job.path is not None for job in out.jobs):
-            shutil.rmtree(tmp, ignore_errors=True)
+    # Recorded as drawn from the ppt, so its image-only pages hit the OCR cache next run
+    out = render.read_rendered(
+        path, src, lambda p, d: render.soffice_pdf(p, d, SOFFICE_TIMEOUT), "legacy", "meltify-ppt-"
+    )
+    # soffice_pdf raises instead of drawing nothing
+    assert out is not None
+    return out

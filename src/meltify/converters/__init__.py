@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 from meltify.evidence import Src
+from meltify.files import RAR_MAGIC, SEVEN_ZIP_MAGIC
 
 TEXT = {
     ".txt",
@@ -73,6 +74,8 @@ OFFICE = {
 
 # How many bytes a sniff sees, enough for magic numbers and a few chat lines
 HEAD = 8192
+# First line of every melted markdown file, so cleanups can tell meltify's files from others
+SOURCE_MARK = "<!-- meltify source: "
 
 
 @dataclass
@@ -136,7 +139,7 @@ class Converted:
         return sum(len(b.text) for b in self.blocks)
 
     def _markdown(self, origin: str) -> Iterator[str]:
-        yield f"<!-- meltify source: {origin} -->"
+        yield f"{SOURCE_MARK}{origin} -->"
         for b in self.blocks:
             yield f"\n## {b.src.cite()}\n{b.text.rstrip()}\n"
         if self.needs:
@@ -153,11 +156,11 @@ class Converted:
 
 
 def place(blocks: list[Block], extra: list[Block]) -> list[Block]:
-    """Extra blocks slotted after the page, slide, sheet or paragraph they belong to
+    """Merge extra blocks in after the page, slide, sheet or paragraph each belongs to
 
-    An extra block's paragraph goes before the first text block that starts on a later
-    line, the number a paragraph's text line shows. A place the extra block doesn't name
-    while the text does, like a picture in an xlsb that cites no sheet, puts it last
+    An extra block for paragraph n goes before the first text block whose line is past n,
+    since a text block's line is its paragraph number. When the text names a place the
+    extra block doesn't, like a picture in an xlsb that cites no sheet, the block goes last
     """
     sheets = list(dict.fromkeys(b.src.sheet for b in blocks if b.src.sheet))
     paged = any(b.src.page for b in blocks)
@@ -229,7 +232,10 @@ def register(kind: str, target: str, *suffixes: str) -> None:
 def register_sniff(
     kind: str, target: str, sniff: str | Sniff, over: set[str] | None = None
 ) -> None:
-    """Pick a converter by content, checked in registration order before any suffix"""
+    """Pick a converter by content for unregistered suffixes or those in `over`
+
+    Sniffs run in registration order
+    """
     SNIFFS.append(Entry(kind, target, sniff, None if over is None else frozenset(over)))
 
 
@@ -406,7 +412,7 @@ register_sniff("hwp", f"{_HERE}.hwp:convert", _zip_mimetype(b"application/hwp+zi
 register_sniff(
     "archive",
     f"{_HERE}.archive:convert",
-    _magic(b"PK\x03\x04", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07"),
+    _magic(b"PK\x03\x04", SEVEN_ZIP_MAGIC, RAR_MAGIC),
 )
 register_sniff(
     "image",

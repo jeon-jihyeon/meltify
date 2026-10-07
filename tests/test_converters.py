@@ -12,11 +12,11 @@ import pytest
 
 from meltify import converters
 from meltify.cli import main
-from meltify.commands.read import job_needs
 from meltify.converters import Child, Converted, Entry, RecognizeJob, pick, suffix_of
 from meltify.converters.run import RunContext
 from meltify.evidence import Src
 from meltify.files import member_name
+from meltify.melt import job_needs
 
 PLANNED = {
     ".zip": "archive",
@@ -361,7 +361,7 @@ def test_depth_limit_is_shared_by_archives_and_mail(tmp_path, monkeypatch, capsy
 def test_jobs_are_queued_on_the_reader(tmp_path):
     from PIL import Image
 
-    from meltify.commands.read import Reader
+    from meltify.melt import Reader
 
     Image.new("RGB", (8, 8)).save(tmp_path / "a.png")
     (tmp_path / "b.mp3").write_bytes(b"\x00")

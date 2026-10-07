@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -49,6 +48,43 @@ def _image_bytes(doc: Any, xref: int) -> bytes:
 def _inline_bytes(page: Any, rect: Any) -> bytes:
     # Inline images have no xref to extract, so render just their area instead
     return page.get_pixmap(clip=rect, dpi=200).tobytes("png")
+
+
+class _Xrefs:
+    """Which xref each drawn image comes from, worked out only for pages that ask
+
+    PyMuPDF matches a drawn image to its xref by decoding and hashing every image on the
+    page. On a scanned PDF that's nearly all the convert time, and scan pages never use it
+    """
+
+    def __init__(self, doc: Any) -> None:
+        self.doc = doc
+        self._drawn: dict[int, list[int]] = {}
+        self._listed: list[set[int]] | None = None
+        self._repeated: dict[int, bool] = {}
+
+    def drawn(self, page: Any) -> list[int]:
+        """Xref of each image in get_image_info order, 0 for inline images and non-PDFs"""
+        if page.number not in self._drawn:
+            infos = page.get_image_info(xrefs=True)
+            self._drawn[page.number] = [i.get("xref", 0) for i in infos]
+        return self._drawn[page.number]
+
+    def repeated(self, xref: int) -> bool:
+        """Whether a 3+ page document draws the image on more than half its pages"""
+        pages = self.doc.page_count
+        if not xref or pages < 3:
+            return False
+        if xref not in self._repeated:
+            if self._listed is None:
+                self._listed = [{img[0] for img in page.get_images()} for page in self.doc]
+            # PyMuPDF only matches a drawn image to an xref its page lists, so the cheap
+            # listing settles most images without decoding any
+            listing = [n for n, xrefs in enumerate(self._listed) if xref in xrefs]
+            if len(listing) / pages > REPEAT_SHARE:
+                listing = [n for n in listing if xref in self.drawn(self.doc[n])]
+            self._repeated[xref] = len(listing) / pages > REPEAT_SHARE
+        return self._repeated[xref]
 
 
 def _layer_chars(marks: Marks, area: Any) -> int:
@@ -133,16 +169,7 @@ def convert(path: Path, src: Src) -> Converted:
     suffix = path.suffix.lower()
     out = Converted("pdf")
     with pymupdf.open(path, filetype=suffix[1:] if suffix in MUPDF else None) as doc:
-        # Only PDF images have an xref, so the others render like inline images
-        drawn = [[{"xref": 0, **i} for i in page.get_image_info(xrefs=True)] for page in doc]
-        pages_with: Counter[int] = Counter()
-        for infos in drawn:
-            pages_with.update({i["xref"] for i in infos if i["xref"]})
-        repeated = {
-            x
-            for x, n in pages_with.items()
-            if doc.page_count >= 3 and n / doc.page_count > REPEAT_SHARE
-        }
+        xrefs = _Xrefs(doc)
         for i, page in enumerate(doc, start=1):
             # The hidden text check and the scan layer check read the same draw log
             marks = Marks(page)
@@ -158,21 +185,23 @@ def convert(path: Path, src: Src) -> Converted:
                 # its images, so text drawn on top of them is read too
                 out.jobs.append(RecognizeJob("page", replace(src, page=i), path=path))
                 continue
-            for n, info in enumerate(drawn[i - 1], start=1):
-                xref = info["xref"]
+            for n, info in enumerate(page.get_image_info(), start=1):
                 bbox = pymupdf.Rect(info["bbox"])
                 shown = bbox & page.rect
                 if (
                     shown.is_empty
                     or shown.width * shown.height < MIN_AREA_PT
                     or min(info["width"], info["height"]) < imaging.MIN_SIDE
-                    or xref in repeated
                 ):
                     continue
                 if (
                     shown.width * shown.height >= COVER_SHARE * page.rect.get_area()
                     and _layer_chars(marks, shown) >= SCAN_CHARS
                 ):
+                    continue
+                # Only PDF images have an xref, so the others render like inline images
+                xref = xrefs.drawn(page)[n - 1]
+                if xrefs.repeated(xref):
                     continue
                 # Pixel boxes map onto the whole drawn rect, even the part off the page
                 rect = bbox if xref else shown

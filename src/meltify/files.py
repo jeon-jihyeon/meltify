@@ -9,6 +9,11 @@ from pathlib import Path
 # Folders macOS shows as one document. iWork saved them this way before 2013, and still
 # does when a document is too big for a single file
 BUNDLES = {".pages", ".key", ".numbers"}
+# Magic bytes that start a 7z or a RAR archive, which read tells apart by content alone
+SEVEN_ZIP_MAGIC = b"7z\xbc\xaf\x27\x1c"
+RAR_MAGIC = b"Rar!\x1a\x07"
+# Work folder names stay at 80 chars: the URL's tail, an underscore and 8 hash chars
+WORK_TAIL = 71
 
 
 def is_bundle(path: Path) -> bool:
@@ -68,6 +73,16 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def safe_name(text: str) -> str:
+    """`text` with every run of characters unsafe in a file name turned into one underscore"""
+    return re.sub(r"[^\w.\-]+", "_", text)
+
+
+def work_name(url: str) -> str:
+    # The tail keeps the name readable, and the hash keeps URLs with the same tail apart
+    return f"{safe_name(url)[-WORK_TAIL:]}_{hashlib.sha256(url.encode()).hexdigest()[:8]}"
+
+
 def _absolute(path: Path) -> Path:
     # Don't follow links, so a linked file keeps its own name
     return Path(os.path.abspath(path))
@@ -78,7 +93,7 @@ def flat_name(path: Path, root: Path | None = None) -> str:
     path = _absolute(path)
     root = _absolute(root) if root else None
     rel = path.relative_to(root) if root and path.is_relative_to(root) else Path(path.name)
-    return re.sub(r"[^\w.\-]+", "_", "__".join(rel.parts))
+    return safe_name("__".join(rel.parts))
 
 
 def member_name(raw: str | None, index: int) -> str:
@@ -98,6 +113,18 @@ def unique_name(name: str, taken: set[str], identity: str) -> str:
     if name.casefold() in taken:
         name = f"{name}-{hashlib.sha256(identity.encode()).hexdigest()[:8]}"
     taken.add(name.casefold())
+    return name
+
+
+def fresh(name: str, taken: set[str], index: int, fold: bool = False) -> str:
+    # Keep the suffix last, so the renamed copy still picks the same converter. Names bound
+    # for disk fold case, since macOS and Windows see Readme.txt and README.txt as one file
+    key = str.casefold if fold else str
+    while key(name) in taken:
+        stem, dot, suffix = name.rpartition(".")
+        name = f"{stem}-{index}.{suffix}" if dot and stem else f"{name}-{index}"
+        index += 1
+    taken.add(key(name))
     return name
 
 

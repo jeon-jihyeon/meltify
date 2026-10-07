@@ -106,7 +106,7 @@ def _pictures(doc: Any, src: Src, out: Converted) -> None:
         if kind in PICTURES:
             out.jobs.append(RecognizeJob("image", job_src, data=data))
         else:
-            # WMF and EMF give their text records and drawings, anything else becomes a need
+            # WMF and EMF give their text records and drawings, and anything else becomes a need
             embeds.picture(job_src, data, f"{item.item_id}.{kind}")
     embeds.into(out)
 

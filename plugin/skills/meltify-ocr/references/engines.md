@@ -2,9 +2,9 @@
 
 | Engine | Runs | Positions | Notes |
 |---|---|---|---|
-| `vision` | macOS, local, free | per line | Apple Vision through ocrmac. The configured language goes first, because macOS 27 applies only the first language |
+| `vision` | macOS, local, free | per line | Apple Vision through ocrmac. The configured language goes first, because Apple Vision on macOS 27 applies only the first language |
 | `paddle` | local, free | per line | PaddleOCR 3. Needs `meltify doctor --install ocr-paddle`, and downloads its models on first use |
-| `gemini` | paid API | per tile | Strongest on Korean documents in published benchmarks. Needs `GEMINI_API_KEY` |
+| `gemini` | paid API | per tile | Needs `GEMINI_API_KEY` |
 | `claude` | paid API | per tile | Needs `ANTHROPIC_API_KEY` |
 | `openai` | paid API | per tile | Any OpenAI-compatible endpoint through `llm.openai_base_url`. Needs `OPENAI_API_KEY` |
 | `--reading NAME=FILE` | none | none | Lines read elsewhere, such as by an agent viewing the prepared image |

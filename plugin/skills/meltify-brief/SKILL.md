@@ -4,7 +4,7 @@ description: Quote every condition sentence of a written problem statement with 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.2.3"
+  version: "0.2.4"
   cli: meltify brief
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Write Edit
 ---
@@ -23,15 +23,15 @@ Most wrong answers come from a misread condition, like reading "10 wins in a row
 
 ## Read the output
 
-- Each row quotes one line verbatim with its `kinds` and a cite such as `statement.md:4`
+- Each row quotes one condition sentence verbatim, as the whole line it sits on, with its `kinds` and a cite such as `statement.md:4`
 - Kinds are count, date, timezone, format, priority, limit and prohibition
 - `new` writes `problems/04-Parking/NOTES.md`, with the statement, the conditions as unchecked items and a checklist, plus `status.json`
 - `board` shows each problem's state, points, checked items and minutes since it was last touched
 
 ## Gotchas
 
-- Only lines with a recognized kind of condition are listed. A condition worded without those keywords won't show up, so still read the whole statement once.
-- Each row is one line. A condition that wraps onto the next line is only partly quoted, so open the cited line and its neighbors.
+- Only sentences with a recognized kind of condition are listed. A condition worded without those keywords won't show up, so still read the whole statement once.
+- Rows split on line breaks, not sentence ends. A sentence that wraps onto the next line is only partly quoted, so open the cited line and its neighbors.
 
 ## Then
 

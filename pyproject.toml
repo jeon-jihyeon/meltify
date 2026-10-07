@@ -1,13 +1,31 @@
 [project]
 name = "meltify"
-version = "0.2.3"
-description = "Melt files of any format into prompt-ready text where every line cites its source"
+version = "0.2.4"
+description = "Melt files of any format into prompt-ready text where every block cites its source"
 readme = "README.md"
 requires-python = ">=3.11.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "jeon-jihyeon" }]
 keywords = ["llm", "prompt", "ocr", "pdf", "transcription", "claude-code", "agent-skills"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Topic :: Text Processing :: General",
+  "Topic :: Text Processing :: Markup :: Markdown",
+  "Topic :: Utilities",
+]
 dependencies = [
   "pymupdf>=1.26",
   "openpyxl>=3.1",
@@ -44,6 +62,9 @@ all = ["meltify[office,media,asr-mlx,archive,parquet,crypto]"]
 
 [project.urls]
 Repository = "https://github.com/jeon-jihyeon/meltify"
+Issues = "https://github.com/jeon-jihyeon/meltify/issues"
+Changelog = "https://github.com/jeon-jihyeon/meltify/blob/main/CHANGELOG.md"
+Releases = "https://github.com/jeon-jihyeon/meltify/releases"
 
 [project.scripts]
 meltify = "meltify.cli:main"
@@ -67,7 +88,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 filterwarnings = ["ignore:builtin type .* has no __module__ attribute:DeprecationWarning"]
 markers = [
-  "llm: calls a paid LLM API and runs only with MELTIFY_TEST_LLM=1",
+  "llm: calls a paid LLM API, deselect with -m \"not llm\"",
   "heavy: needs a large model download",
   "macos: needs macOS frameworks",
 ]
