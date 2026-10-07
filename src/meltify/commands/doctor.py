@@ -16,7 +16,7 @@ from meltify.evidence import MISSING, Envelope
 from meltify.needs import CELL_NOTE, error_note
 
 NAME = "doctor"
-HELP = "check engines, binaries and API keys that the other commands need"
+HELP = "check the engines, binaries and API keys that read needs"
 COLUMNS = ["check", "ok", "detail", "used_by", "hint"]
 
 IS_MAC = sys.platform == "darwin"
@@ -24,16 +24,15 @@ IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
 
 # Each entry: module, its users, install hint, and whether the base install needs it
 MODULES = [
-    ("pymupdf", "read ocr hidden", "pip install meltify", True),
+    ("pymupdf", "read pdf", "pip install meltify", True),
     ("openpyxl", "read", "pip install meltify", True),
-    ("PIL", "ocr media", "pip install meltify", True),
-    ("numpy", "ocr media", "pip install meltify", True),
-    ("jsonschema", "check", "pip install meltify", True),
-    ("httpx", "submit ocr", "pip install meltify", True),
+    ("PIL", "read images", "pip install meltify", True),
+    ("numpy", "read images frames", "pip install meltify", True),
+    ("httpx", "read urls, llm engines", "pip install meltify", True),
     ("trafilatura", "read urls", "pip install meltify", True),
     ("hwpx", "read hwp hwpx", "pip install meltify", True),
     ("striprtf", "read rtf", "pip install meltify", True),
-    ("pi_heif", "read ocr heic avif", "pip install meltify", True),
+    ("pi_heif", "read heic avif", "pip install meltify", True),
     ("markitdown", "read docx pptx msg epub", "meltify doctor --install office", False),
     ("olefile", "read msg ppt", "meltify doctor --install office", False),
     (
@@ -51,18 +50,18 @@ MODULES = [
     ("numbers_parser", "read numbers", "meltify doctor --install iwork", False),
     ("pyarrow", "read parquet", "meltify doctor --install parquet", False),
     ("playwright", "read --render", "meltify doctor --install render", False),
-    ("yt_dlp", "media urls", "meltify doctor --install media", False),
-    ("paddleocr", "ocr engine paddle", "meltify doctor --install ocr-paddle", False),
+    ("yt_dlp", "read video urls", "meltify doctor --install media", False),
+    ("paddleocr", "read ocr paddle", "meltify doctor --install ocr-paddle", False),
 ]
 if IS_MAC:
-    MODULES.append(("ocrmac", "ocr engine vision", "pip install meltify", True))
+    MODULES.append(("ocrmac", "read ocr vision", "pip install meltify", True))
 if IS_APPLE_SILICON:
-    MODULES.append(("mlx_whisper", "media read asr", "meltify doctor --install asr-mlx", False))
+    MODULES.append(("mlx_whisper", "read asr", "meltify doctor --install asr-mlx", False))
 
 BINARIES = [
-    ("ffmpeg", "media read audio", "brew install ffmpeg or apt install ffmpeg"),
-    ("ffprobe", "media read fallback", "installed with ffmpeg"),
-    ("deno", "media youtube", "brew install deno"),
+    ("ffmpeg", "read recordings", "brew install ffmpeg or apt install ffmpeg"),
+    ("ffprobe", "read recordings, fallback", "installed with ffmpeg"),
+    ("deno", "read youtube", "brew install deno"),
     ("whisper-cli", "asr engine whispercpp", "brew install whisper-cpp"),
     ("wpd2text", "read wpd", "brew install libwpd or apt install libwpd-tools"),
     ("uv", "launcher and --install", "https://docs.astral.sh/uv/"),
@@ -118,7 +117,11 @@ def _row(check: str, ok: bool, detail: str, used_by: str = "", hint: str = "") -
 def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[dict[str, Any]]:
     rows = [
         _row(
-            "python", sys.version_info >= (3, 11), platform.python_version(), "all", "Python 3.11+"
+            "python",
+            sys.version_info >= (3, 11, 9),
+            platform.python_version(),
+            "all",
+            "Python 3.11.9 or newer",
         ),
         _row("meltify", True, __version__),
     ]
@@ -140,7 +143,7 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
                 f"key {name}",
                 present,
                 "set" if present else "unset",
-                "ocr llm engines",
+                "read llm engines",
                 f"export {name}=...",
             )
         )
@@ -173,7 +176,6 @@ def chrome() -> str | None:
 
 
 def _where(binary: str) -> str:
-
     return f"{binary} (downloaded)" if Path(binary).is_relative_to(paths.tools_dir()) else binary
 
 
@@ -251,7 +253,7 @@ def engines(settings: dict[str, Any]) -> list[dict[str, Any]]:
                 f"ocr {name}",
                 why is None,
                 "ready" if why is None else "unavailable",
-                "ocr",
+                "read images",
                 why or "",
             )
         )
@@ -262,7 +264,7 @@ def engines(settings: dict[str, Any]) -> list[dict[str, Any]]:
                 f"asr {engine.name}",
                 why is None,
                 "ready" if why is None else "unavailable",
-                "media",
+                "read recordings",
                 why or "",
             )
         )

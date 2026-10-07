@@ -298,14 +298,14 @@ def test_ppt_holds_the_pymupdf_lock_only_while_reading_the_render(tmp_path, monk
         out = Path(args[args.index("--outdir") + 1])
         (out / f"{Path(args[-1]).stem}.pdf").write_bytes(b"%PDF-")
 
-    def convert(path, src):
+    def melt(path, src, look):
         seen["pymupdf"] = free()
         return ppt.Converted("pdf")
 
     _soffice(monkeypatch, lambda: "/opt/soffice")
     monkeypatch.setattr(render, "soffice", lambda: "/opt/soffice")
     monkeypatch.setattr(render, "run", run)
-    monkeypatch.setattr(pdf, "convert", convert)
+    monkeypatch.setattr(pdf, "melt", melt)
     out = _convert(tmp_path / "deck.pps", Src("deck.pps"))
     assert out.kind == "legacy"
     assert seen == {"soffice": True, "pymupdf": False}

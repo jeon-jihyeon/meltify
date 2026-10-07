@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 # Folders macOS shows as one document. iWork saved them this way before 2013, and still
@@ -47,22 +48,35 @@ def iter_files(paths: Iterable[Path], suffixes: set[str] | None = None) -> Itera
                 yield f
 
 
-def parse_pages(spec: str | None, count: int) -> list[int]:
-    """1-based page numbers from a spec like 1,3-5, within the page count"""
-    if spec is None:
-        return list(range(1, count + 1))
-    pages: list[int] = []
-    for part in spec.split(","):
-        m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?", part)
-        if not m:
-            raise ValueError(f"bad page spec {spec!r}, use numbers like 1,3-5")
-        lo, hi = int(m[1]), int(m[2] or m[1])
-        if lo > hi:
-            raise ValueError(f"reversed page range {part.strip()} in {spec!r}")
-        if lo < 1 or hi > count:
-            raise ValueError(f"pages {part.strip()} outside 1-{count}")
-        pages += [n for n in range(lo, hi + 1) if n not in pages]
-    return pages
+@dataclass(frozen=True)
+class Pages:
+    """1-based page ranges from a spec like 1,3-5, applied to documents of any length"""
+
+    spec: str
+    ranges: tuple[tuple[int, int], ...]
+
+    @classmethod
+    def parse(cls, spec: str) -> Pages:
+        ranges = []
+        for part in spec.split(","):
+            m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?", part)
+            if not m:
+                raise ValueError(f"bad page spec {spec!r}, use numbers like 1,3-5")
+            lo, hi = int(m[1]), int(m[2] or m[1])
+            if lo < 1:
+                raise ValueError(f"pages start at 1, got {part.strip()} in {spec!r}")
+            if lo > hi:
+                raise ValueError(f"reversed page range {part.strip()} in {spec!r}")
+            ranges.append((lo, hi))
+        return cls(spec, tuple(ranges))
+
+    def of(self, count: int) -> list[int]:
+        """The selected pages of a `count`-page document, in document order"""
+        return [n for n in range(1, count + 1) if any(lo <= n <= hi for lo, hi in self.ranges)]
+
+
+def doc_pages(pages: Pages | None, count: int) -> list[int]:
+    return list(range(1, count + 1)) if pages is None else pages.of(count)
 
 
 def sha256(path: Path) -> str:

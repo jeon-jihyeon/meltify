@@ -2,6 +2,36 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
+## 0.3.0
+
+meltify is now about one job: melting files into cited text. `read` does all of it, and `doctor` checks what it needs.
+
+### Changed
+
+- `ocr`, `hidden` and `media` folded into `read`, with every flag they had. The old names still run as `read` with a warning and are removed in 0.4.0. `ocr` becomes `read --ocr-pages`, `hidden` becomes `read --hidden`, and `media` becomes `read --fps 1` with `--no-frames` as `--frames 0`
+  - Images: `--upscale`, `--no-sharpen`, `--equalize`, `--compare` and `--reading NAME=FILE`, on top of the engines `read` already ran and compared. `--ocr-pages` OCRs PDF pages that have a text layer too, which `ocr` always did
+  - PDFs: `--hidden` adds a row of kind `hidden` per hidden span, `--contrast` a row of kind `contrast` per page with the render's path, and `--pages` limits every PDF in the run
+  - Recordings: `--start`, `--end`, `--scene`, `--fps`, `--keep-duplicates` and `--subs-only`. Each video's frames are kept under `attachments/` as rows of kind `frame`, OCR'd or not
+- Per-engine `line` rows and the `prepared.png` files from `ocr` are gone. OCR lines live in the markdown with their positions, and disputed values keep their own rows
+- `ocr.upscale` defaults to 0, which sizes each picture on its own as `read` always did, and `media.fps` to 0, so interval frames are taken only when asked for
+- Every frame `read` keeps, scene or interval, counts toward `--frames`, spread over the video, with distinct frames ahead of kept duplicates. A warning says when the cap dropped some
+- With `--hidden`, the summary says `0 hidden spans` when there were none, and warnings count the items it couldn't check and the text inside images it can't see
+- A picture only one engine read is counted in the summary and warned about, since nothing in it was cross-checked
+- Transcripts say where they came from, as `> from subtitles NAME` or `> transcribed by ENGINE`
+- `meltify.read` keywords go through each flag's own checks, so `pages=2` or `compare="words"` is taken or refused the way the command line would
+- Disputed rows carry `kind` set to `disputed`, without the old `type` key, and frame rows say why each frame was taken in `reasons`
+- An OCR engine named only in a config file that isn't available leaves pictures listed in `needs` with a warning, instead of stopping the run after the text was written
+- `--pages`, `--ocr-pages`, `--hidden` and `--contrast` apply to PDFs you pass or that a container holds, not to the PDFs meltify draws itself for other formats
+- A URL that failed this run keeps the markdown it wrote before even when it had redirected, since the markdown now records the URL as given
+
+### Removed
+
+- `submit`, `check` and `brief`, with their skills and settings. They worked on answers rather than files. `jsonschema` is no longer a dependency
+
+### Added
+
+- A video or recording with a `.vtt` or `.srt` file of the same name beside it takes its transcript from that file, without a speech engine
+
 ## 0.2.4
 
 ### Fixed
@@ -13,8 +43,7 @@ All notable changes to meltify. Versions follow [semantic versioning](https://se
 - URL fetching refuses to run if the installed httpx can't pin the checked address, instead of fetching without the pin
 - A rerun into the same `--out` folder removes the markdown and attachments of items the previous run wrote and this run didn't name at all, so a grep of the folder no longer finds stale items. An item that failed this run keeps its previous markdown, and files you put there yourself stay
 - An item whose pictures and recordings were all read but held no text says `no text found` in `needs`, so a blank scan isn't mistaken for one nobody read
-- A config key no default names, like a typo, is reported as a warning instead of being ignored. `[[check.field]]` tables don't trigger it
-
+- A config key no default names, like a typo, is reported as a warning instead of being ignored
 - A number flag set to 0, like `media --scene 0`, is used as 0 instead of falling back to the setting. `--fps 0` and `--upscale 0` are usage errors
 - `doctor --install` outside the plugin launcher prints the `pip install` or `uv tool install` command for the extra, pinned to this version and keeping the extras already installed, instead of installing into a venv that command never runs. A missing extra found by the rendering fallback keeps its install hint
 - `read --engines` or `--asr` naming an engine that isn't available fails before any markdown is written, instead of after the text files are already out

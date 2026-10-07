@@ -204,14 +204,14 @@ def test_disputed_and_unchecked_markdown(cached, monkeypatch, capsys):
         "> disputed 655: vision 1, paddle 0\n"
         "> disputed 665: vision 0, paddle 1\n\n"
     )
-    disputed = [r for r in out["results"] if r.get("type") == "disputed"]
+    disputed = [r for r in out["results"] if r["kind"] == "disputed"]
     assert [(r["value"], r["counts"]) for r in disputed] == [
         ("655", {"vision": 1, "paddle": 0}),
         ("665", {"vision": 0, "paddle": 1}),
     ]
     assert disputed[0]["cite"] == f"{cached}/menu.png@px(40,10,200,18)"
     index = Path(out["artifacts"][0]["path"]).read_text()
-    assert index.count('"type": "disputed"') == 2
+    assert index.count('"kind": "disputed"') == 2
 
     _engines(monkeypatch, Fake("paddle", ["TOTAL 655"]))
     rows, _ = _read(capsys, cached / "menu.png", "--refresh")
@@ -416,7 +416,7 @@ def test_url_media_uses_subtitles_instead_of_speech(cached, monkeypatch, capsys)
     url = "https://youtu.be/abc"
     rows, _ = _read(capsys, url)
     md = Path(rows[url]["out"]).read_text()
-    assert f"## {url}\n@00:00:00.5-00:00:01.8| first words" in md
+    assert f"## {url}\n> from subtitles v.ko.vtt\n@00:00:00.5-00:00:01.8| first words" in md
     assert speech.calls == 0
 
     rows, _ = _read(capsys, url, "--shallow")
@@ -521,11 +521,11 @@ def test_ffmpeg_failure_on_one_video_leaves_a_need_not_a_crash(cached, monkeypat
     warned = []
     rec = Recognizer(Options(), {}, warned.append)
     jobs = [
-        RecognizeJob("video", Src("pic.qqq"), path=clip),
+        RecognizeJob("video", Src("pic.qqq"), path=clip, listen=False),
         RecognizeJob("image", Src("a.png"), path=image),
     ]
     # Already transcribed, so only the frames are needed and ffmpeg fails on them
-    video, still = rec.run(jobs, transcribed={Src("pic.qqq")})
+    video, still = rec.run(jobs)
     assert video.left == "failed" and video.blocks == []
     assert still.left is None and "frame text" in still.blocks[0].text
     assert warned == ["can't read pic.qqq: ffmpeg exited 234: no decoder found for: svg"]
@@ -693,3 +693,17 @@ def test_an_engine_named_on_the_command_line_is_checked_before_anything_is_writt
     assert main(["read", "a.txt", "--engines", "gemini", "--json"]) == 3
     assert json.loads(capsys.readouterr().out)["errors"][0]["code"] == "missing"
     assert not list((cached / "meltify-out").rglob("*.md"))
+
+
+def test_an_engine_named_only_in_config_leaves_pictures_listed(cached, monkeypatch, capsys):
+    monkeypatch.setenv("MELTIFY_OCR_ENGINES", "gemini")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    (cached / "a.png").write_bytes(card("TOTAL", (300, 100)))
+    (cached / "b.txt").write_text("plain")
+    assert main(["read", "a.png", "b.txt", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    rows = {r["cite"]: r for r in out["results"]}
+    assert rows["a.png"]["needs"] == ["ocr"]
+    assert any("images stay listed as needs" in w for w in out["warnings"])
+    # Named on the command line, the same engine fails the run before anything is written
+    assert main(["read", "a.png", "--engines", "gemini", "--json"]) == 3

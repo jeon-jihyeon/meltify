@@ -189,15 +189,3 @@ def scan_page(
 
 
 DEFAULT_LIMITS = Thresholds()
-
-
-def scan(
-    path: str, pages: list[int] | None = None, limits: Thresholds = DEFAULT_LIMITS
-) -> list[HiddenSpan]:
-    import pymupdf
-
-    with pymupdf.open(path) as doc:
-        numbers = list(range(1, doc.page_count + 1)) if pages is None else pages
-        if not numbers:
-            raise ValueError(f"no pages selected in {path}")
-        return [span for n in numbers for span in scan_page(doc[n - 1], n, limits)]

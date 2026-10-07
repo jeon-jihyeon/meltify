@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from meltify.ffmpeg import Window
+from meltify.files import Pages
+
 # PyMuPDF isn't thread-safe, and read converts files in parallel. Reentrant, because a PDF
 # conversion that holds it can reach a page render through an embedded picture
 LOCK = threading.RLock()
@@ -70,6 +73,24 @@ class WebKit:
 
 
 @dataclass(frozen=True)
+class PdfLook:
+    """How closely read looks at each PDF item, plain values so a PDF worker process gets them
+
+    A PDF that a renderer drew for another format is read with the defaults instead, since
+    these flags speak of the user's PDFs
+    """
+
+    # --pages, the pages to melt
+    pages: Pages | None = None
+    # --ocr-pages, which OCRs every page as drawn, text layer or not
+    ocr_pages: bool = False
+    # --hidden, which keeps a result row per hidden span instead of only counting them
+    hidden: bool = False
+    # --contrast renders each page at this dpi with stretched contrast, None for no renders
+    contrast_dpi: int | None = None
+
+
+@dataclass(frozen=True)
 class RunContext:
     password: str | None = None
     fallback: bool = True  # read.fallback
@@ -79,6 +100,11 @@ class RunContext:
     # head is melted and the rest counted
     parquet_rows: int = 200
     quicklook: bool = True  # render.quicklook
+    pdf: PdfLook = field(default_factory=PdfLook)
+    # read --start and --end, the part of each recording to transcribe and look at
+    window: Window = field(default_factory=Window)
+    # read --subs-only, which takes a recording's transcript from its subtitles alone
+    subs_only: bool = False
     # Shared by the run's workers but never by two runs, so equality leaves them out
     budget: Budget = field(default_factory=Budget, compare=False)
     webkit: WebKit = field(default_factory=WebKit, compare=False)

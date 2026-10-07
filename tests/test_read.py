@@ -463,3 +463,17 @@ def test_a_render_standing_in_for_a_missing_extra_keeps_its_hint(tmp_path, monke
     out = Reader(tmp_path, {})._convert(convert, tmp_path / "a.xls", Src("a.xls"), row)
     assert out.needs == ["office extra", "office extra"]
     assert row["hint"] == "meltify doctor --install office"
+
+
+def test_a_failed_url_keeps_the_markdown_its_redirect_target_wrote(tmp_path):
+    from meltify.commands.read import drop_stale
+
+    md = tmp_path / "a.md"
+    md.write_text(
+        "<!-- meltify source: https://x.org/a/ fetched_at=t final_url=https://x.org/a/"
+        " url=https://x.org/a -->\n"
+    )
+    drop_stale(tmp_path, [{"cite": "https://x.org/a", "out": None}])
+    assert md.exists()
+    drop_stale(tmp_path, [{"cite": "https://x.org/b", "out": None}])
+    assert not md.exists()

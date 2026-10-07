@@ -8,18 +8,17 @@ Please report vulnerabilities through a private GitHub security advisory on this
 
 The data directory below is `$CLAUDE_PLUGIN_DATA` when the plugin sets it, else `${XDG_DATA_HOME:-~/.local/share}/meltify`.
 
-- `ocr` and `read --engines` with the `claude`, `gemini` or `openai` engine upload the prepared image or its tiles to that provider
-- `media --asr api` and `read --asr api` upload the extracted audio to the configured transcription endpoint
-- `submit` uploads candidate files to the URL you configure
+- `read --engines` with the `claude`, `gemini` or `openai` engine uploads each prepared image or its tiles to that provider
+- `read --asr api` uploads the extracted audio to the configured transcription endpoint
 - `doctor --probe` makes one tiny request per configured key
 - `read` with a URL fetches that URL, its redirects and the site's `robots.txt`. With `--render`, the headless browser also loads the page's scripts, styles and API calls
-- `media`, and `read` with a video URL, download the video and its subtitles through yt-dlp
+- `read` with a video URL downloads the video and its subtitles through yt-dlp
 - The plugin launcher runs `uvx` when it can't find a local meltify of its version, and uv downloads the package and its dependencies
 - `doctor --install` downloads the named extra and its dependencies into a venv in the data directory, plus Python 3.12 if uv doesn't have it yet. `--install render` also downloads Playwright's Chromium when it can't find Google Chrome. `--install archive` and `--install all` also download 7-Zip, and `--install libreoffice` downloads a portable LibreOffice. See [Downloaded programs](#downloaded-programs)
 - The local PaddleOCR and MLX Whisper engines download their model weights from their publishers the first time they run, which `read` triggers too when it meets an image or a recording. PaddleOCR keeps them under `~/.paddlex`, MLX Whisper in the Hugging Face cache
 - Nothing else touches the network. Once the models are cached, local engines and every other command run offline
 
-## URLs in `read` and `media`
+## URLs in `read`
 
 `read` treats every URL and everything it links to as untrusted:
 
@@ -32,7 +31,7 @@ The data directory below is `$CLAUDE_PLUGIN_DATA` when the plugin sets it, else 
 - Downloads stop at 20 MB (`--max-bytes`), connections time out after 10 seconds and a whole fetch after 30, and requests to one host are spaced at least a second apart
 - `--allow-private` lifts only the address check, for intranet pages you trust
 
-A video URL, given to `media` or found by `read`, gets the same scheme and address check before yt-dlp sees it. yt-dlp then makes its own requests, for manifests and media segments, which meltify doesn't check one by one. `media --allow-private` lifts the address check there too.
+A video URL gets the same scheme and address check before yt-dlp sees it. yt-dlp then makes its own requests, for manifests and media segments, which meltify doesn't check one by one. `--allow-private` lifts the address check there too.
 
 ## Archives and documents
 
@@ -121,7 +120,3 @@ Three environment variables change that:
 ## Keys
 
 API keys are read from the environment variables named in the config. Config files hold only the variable names. `doctor` reports whether a key is set and never prints its value.
-
-## Rate-limited endpoints
-
-`submit` enforces a minimum gap between requests, honors `Retry-After` and refuses to resend identical bytes. Check the endpoint's terms before you submit, and never run two submitters against the same endpoint.

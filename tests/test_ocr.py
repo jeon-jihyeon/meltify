@@ -9,7 +9,6 @@ from PIL import Image, ImageDraw
 
 from meltify import imaging
 from meltify.cli import main
-from meltify.commands.ocr import Target
 from meltify.engines import ocr as engines
 from meltify.engines.consensus import EngineReading, compare
 from meltify.engines.ocr import LOCAL, REMOTE, TextBox
@@ -57,27 +56,25 @@ def test_each_value_cites_the_first_box_with_a_bbox_in_engine_order():
     assert [v.bbox for v in compare([EngineReading("c", LOCAL, [TextBox("42")])])] == [None]
 
 
-def test_target_maps_back_to_original_units():
-    img = Target(None, "menu.png", None, 3, 1 / 3, "px")
-    assert img.src((30, 60, 90, 120)).cite() == "menu.png@px(10,20,30,40)"
-    page = Target(None, "a.pdf", 2, 1, 72 / 300, "pt")
-    assert page.src((300, 300, 600, 600)).cite() == "a.pdf#p2@pt(72,72,144,144)"
-    assert page.src(None).cite() == "a.pdf#p2"
+def test_upscale_and_equalize_shape_the_picture_and_its_cache_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    seen = []
 
+    @dataclass
+    class Sizer(Fake):
+        def recognize(self, image, size):
+            seen.append(size)
+            return super().recognize(image, size)
 
-def test_pdf_pages_use_dpi_without_upscale(tmp_path):
-    import pymupdf
-
-    from meltify.commands.ocr import _targets
-
-    pdf = tmp_path / "a.pdf"
-    doc = pymupdf.open()
-    doc.new_page(width=72, height=144)
-    doc.save(pdf)
-    (page,) = _targets(pdf, None, 300, 3)
-    assert (page.upscale, page.image.size) == (1.0, (300, 600))
-    (img,) = _targets(_menu(tmp_path / "m.png"), None, 300, 3)
-    assert img.upscale == 3
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Sizer("vision", ["TOTAL 655"])])
+    menu = str(_menu(tmp_path / "m.png"))
+    assert main(["read", menu, "--upscale", "2", "--no-sharpen", "--equalize"]) == 0
+    assert seen == [(600, 160)]
+    # Another preparation is another reading, not a cache hit
+    assert main(["read", menu, "--upscale", "3"]) == 0
+    assert seen == [(600, 160), (900, 240)]
+    assert main(["read", menu, "--upscale", "3"]) == 0
+    assert len(seen) == 2
 
 
 def test_tiles_cover_large_images():
@@ -88,6 +85,23 @@ def test_tiles_cover_large_images():
     assert imaging.tiles(Image.new("RGB", (100, 100)), 2576)[0].x == 0
 
 
+def _scans(path: Path, pages: int) -> Path:
+    import io
+
+    import pymupdf
+
+    doc = pymupdf.open()
+    for n in range(pages):
+        buf = io.BytesIO()
+        img = Image.new("RGB", (400, 200), "white")
+        ImageDraw.Draw(img).text((10, 30), f"PAGE {n}", fill="black")
+        img.save(buf, format="PNG")
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=buf.getvalue())
+    doc.save(path)
+    return path
+
+
 def _menu(path: Path) -> Path:
     img = Image.new("RGB", (300, 80), "white")
     ImageDraw.Draw(img).text((10, 30), "TOTAL 655", fill="black")
@@ -95,31 +109,60 @@ def _menu(path: Path) -> Path:
     return path
 
 
-def test_cli_with_fake_engines_lists_disputes_first(tmp_path, monkeypatch, capsys):
+def _rows(capsys):
+    out = json.loads(capsys.readouterr().out)
+    return out, [r for r in out["results"] if r["kind"] == "disputed"]
+
+
+def test_read_lists_values_the_engines_dispute(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         engines,
         "select",
         lambda spec, s: [Fake("vision", ["TOTAL 655"]), Fake("paddle", ["TOTAL 665"])],
     )
-    code = main(["ocr", str(_menu(tmp_path / "m.png")), "--json"])
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0
-    assert [r["type"] for r in out["results"][:2]] == ["disputed", "disputed"]
-    assert out["results"][0]["cite"].startswith(f"{tmp_path}/m.png@px(")
-    assert "0 agreed, 2 disputed" in out["summary"]
-    assert Path(out["artifacts"][0]["path"]).is_file()
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--json"]) == 0
+    out, disputed = _rows(capsys)
+    assert [r["value"] for r in disputed] == ["655", "665"]
+    assert disputed[0]["cite"].startswith(f"{tmp_path}/m.png@px(")
+    assert "2 disputed values" in out["summary"]
+
+
+def test_compare_tokens_disputes_words(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        engines,
+        "select",
+        lambda spec, s: [Fake("vision", ["STOP here"]), Fake("paddle", ["SHOP here"])],
+    )
+    menu = str(_menu(tmp_path / "m.png"))
+    assert main(["read", menu, "--json"]) == 0
+    assert _rows(capsys)[1] == []
+    assert main(["read", menu, "--compare", "tokens", "--json"]) == 0
+    assert {r["value"] for r in _rows(capsys)[1]} == {"STOP", "SHOP"}
 
 
 def test_agent_reading_counts_as_an_engine(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 655"])])
+    (tmp_path / "mine.txt").write_text("TOTAL 665\n")
+    menu = str(_menu(tmp_path / "m.png"))
+    assert main(["read", menu, "--reading", "agent=mine.txt", "--json"]) == 0
+    out, disputed = _rows(capsys)
+    counts = {r["value"]: r["counts"] for r in disputed}
+    assert counts == {"655": {"vision": 1, "agent": 0}, "665": {"vision": 0, "agent": 1}}
+    # The reading isn't cached, so a run without it has one engine again
+    assert main(["read", menu, "--json"]) == 0
+    assert _rows(capsys)[1] == []
+
+
+def test_a_reading_alone_needs_no_engine(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [])
     (tmp_path / "mine.txt").write_text("TOTAL 655\n")
-    main(
-        ["ocr", str(_menu(tmp_path / "m.png")), "--reading", f"agent={tmp_path}/mine.txt", "--json"]
-    )
-    out = json.loads(capsys.readouterr().out)
-    assert "1 agreed, 0 disputed" in out["summary"]
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--reading", "me=mine.txt"]) == 0
+    md = (tmp_path / "meltify-out/read/m.png.md").read_text()
+    assert "TOTAL 655" in md and "unchecked: one engine" in md
 
 
 class FakeRemote(engines.Remote):
@@ -146,10 +189,19 @@ def test_remote_lines_in_tile_overlap_count_once(tmp_path, monkeypatch, capsys):
         "select",
         lambda spec, s: [Fake("vision", ["TOTAL 655"]), FakeRemote(["TOTAL 655"])],
     )
-    main(["ocr", str(_menu(tmp_path / "m.png")), "--upscale", "10", "--json"])
-    out = json.loads(capsys.readouterr().out)
-    assert len(list((tmp_path / "meltify-out/ocr/m.png").glob("tile*.png"))) == 2
-    assert "1 agreed, 0 disputed" in out["summary"]
+    tiles = []
+    real = engines.read_tiles
+    monkeypatch.setattr(
+        engines,
+        "read_tiles",
+        lambda e, image, size, work: tiles.append(1) or real(e, image, size, work),
+    )
+    original = imaging.tiles
+    monkeypatch.setattr(imaging, "tiles", lambda *a, **k: tiles.extend(t := original(*a, **k)) or t)
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--upscale", "10", "--json"]) == 0
+    out, disputed = _rows(capsys)
+    assert len(tiles) == 3 and disputed == []
+    assert "0 disputed values" in out["summary"]
 
 
 def test_failing_remote_engine_warns_and_others_go_on(tmp_path, monkeypatch, capsys):
@@ -164,10 +216,10 @@ def test_failing_remote_engine_warns_and_others_go_on(tmp_path, monkeypatch, cap
             FakeRemote([], KeyError("candidates")),
         ],
     )
-    assert main(["ocr", str(_menu(tmp_path / "m.png")), "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--json"]) == 0
+    out, disputed = _rows(capsys)
     assert any(w.startswith("gemini failed on") for w in out["warnings"])
-    assert "1 agreed, 0 disputed" in out["summary"]
+    assert disputed == []
     assert "secret-value" not in json.dumps(out)
 
 
@@ -176,16 +228,24 @@ def test_reading_needs_one_target_and_the_name_file_form(tmp_path, monkeypatch, 
     monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 655"])])
     (tmp_path / "mine.txt").write_text("TOTAL 655\n")
     a, b = _menu(tmp_path / "a.png"), _menu(tmp_path / "b.png")
-    assert main(["ocr", str(a), str(b), "--reading", "agent=mine.txt"]) == 2
-    assert "exactly one image" in capsys.readouterr().err
-    assert main(["ocr", str(a), "--reading", str(tmp_path)]) == 2
-    assert "NAME=FILE" in capsys.readouterr().err
+    assert main(["read", str(a), str(b), "--reading", "agent=mine.txt", "--json"]) == 2
+    assert "exactly one local image" in capsys.readouterr().out
+    pdf = tmp_path / "two.pdf"
+    _scans(pdf, 2)
+    assert main(["read", str(pdf), "--reading", "agent=mine.txt", "--json"]) == 2
+    assert "exactly one image or OCR'd PDF page, got 2" in capsys.readouterr().out
+    assert main(["read", str(pdf), "--pages", "2", "--reading", "agent=mine.txt"]) == 0
+    capsys.readouterr()
+    assert main(["read", str(a), "--reading", str(tmp_path), "--json"]) == 2
+    assert "NAME=FILE" in capsys.readouterr().out
 
 
-def test_no_engine_exits_three(tmp_path, monkeypatch):
+def test_no_engine_leaves_the_picture_listed(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(engines, "select", lambda spec, s: [])
-    assert main(["ocr", str(_menu(tmp_path / "m.png"))]) == 3
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--json"]) == 0
+    [row] = json.loads(capsys.readouterr().out)["results"]
+    assert row["needs"] == ["ocr"]
 
 
 def test_paid_engines_are_never_auto():
@@ -213,23 +273,13 @@ def test_vision_reads_korean_menu(tmp_path):
     assert all(b.bbox and 0 <= b.bbox[0] < b.bbox[2] <= 420 for b in boxes)
 
 
-def test_non_image_input_is_a_usage_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["x"])])
-    notes = tmp_path / "notes.txt"
-    notes.write_text("not an image")
-    assert main(["ocr", str(notes), "--json"]) == 2
-    out = json.loads(capsys.readouterr().out)
-    assert "notes.txt isn't an image or a PDF" in out["errors"][0]["message"]
-
-
 def test_lang_flag_reaches_the_engines(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     seen = []
     monkeypatch.setattr(
         engines, "select", lambda spec, s: seen.append(s["lang"]) or [Fake("vision", ["x"])]
     )
-    assert main(["ocr", str(_menu(tmp_path / "m.png")), "--lang", "de"]) == 0
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--lang", "de"]) == 0
     assert seen == ["de"]
 
 
@@ -239,7 +289,7 @@ def test_lang_flag_is_lowercased_and_checked(tmp_path, monkeypatch, capsys):
     assert lang.code(" EN ") == "en"
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as e:
-        main(["ocr", "m.png", "--lang", "english"])
+        main(["read", "m.png", "--lang", "english"])
     assert e.value.code == 2
     assert "unknown language 'english', use one of ko, en" in capsys.readouterr().err
 
@@ -249,8 +299,78 @@ def test_a_library_value_error_keeps_its_name(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["x"])])
     (tmp_path / "mine.txt").write_bytes(b"\xff\xfe bad utf-8 \xc3")
     assert (
-        main(["ocr", str(_menu(tmp_path / "m.png")), "--reading", "agent=mine.txt", "--json"]) == 2
+        main(["read", str(_menu(tmp_path / "m.png")), "--reading", "agent=mine.txt", "--json"]) == 2
     )
     assert json.loads(capsys.readouterr().out)["errors"][0]["message"].startswith(
         "UnicodeDecodeError: "
     )
+
+
+def _text_page_over_scan(path: Path) -> Path:
+    """A page whose text layer says 48,280 over a picture that shows 48,250"""
+    import io
+
+    import pymupdf
+
+    buf = io.BytesIO()
+    img = Image.new("RGB", (400, 200), "white")
+    ImageDraw.Draw(img).text((10, 30), "TOTAL 48,250", fill="black")
+    img.save(buf, format="PNG")
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "TOTAL 48,280 as the layer says, long enough to count as text")
+    page.insert_image(pymupdf.Rect(72, 100, 472, 300), stream=buf.getvalue())
+    doc.save(path)
+    return path
+
+
+def test_ocr_pages_checks_a_text_layer_against_the_pixels(tmp_path, monkeypatch, capsys):
+    import pymupdf
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 48,250"])])
+    pdf = str(_text_page_over_scan(tmp_path / "layer.pdf"))
+    (tmp_path / "mine.txt").write_text("TOTAL 48,250\n")
+    text_only = tmp_path / "text.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "TOTAL 48,280 as the layer says, long enough to count")
+    doc.save(text_only)
+    # Without --ocr-pages a page with a text layer goes unread, so a reading has no picture
+    assert main(["read", str(text_only), "--reading", "agent=mine.txt", "--json"]) == 2
+    assert "Add --ocr-pages" in capsys.readouterr().out
+    assert main(["read", pdf, "--ocr-pages", "--reading", "agent=mine.txt", "--json"]) == 0
+    capsys.readouterr()
+    md = (tmp_path / "meltify-out/read/layer.pdf.md").read_text()
+    assert "48,280 as the layer says" in md and "@pt(" in md and "48,250" in md
+
+
+def test_one_engine_is_called_out_in_the_summary(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 655"])])
+    assert main(["read", str(_menu(tmp_path / "m.png")), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "1 pictures read by one engine only" in out["summary"]
+    assert any("nothing there was cross-checked" in w for w in out["warnings"])
+
+
+def test_the_old_ocr_command_ocrs_every_page(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 48,250"])])
+    pdf = str(_text_page_over_scan(tmp_path / "layer.pdf"))
+    assert main(["ocr", pdf, "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["warnings"][0].endswith("use meltify read --ocr-pages instead")
+    assert "TOTAL 48,250" in (tmp_path / "meltify-out/read/layer.pdf.md").read_text()
+
+
+def test_a_refused_reading_writes_no_markdown(tmp_path, monkeypatch, capsys):
+    import pymupdf
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["x"])])
+    (tmp_path / "mine.txt").write_text("x\n")
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "a text layer long enough to count as text")
+    doc.save(tmp_path / "t.pdf")
+    assert main(["read", "t.pdf", "--reading", "agent=mine.txt", "--json"]) == 2
+    assert not list((tmp_path / "meltify-out").rglob("*.md"))

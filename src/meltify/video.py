@@ -5,11 +5,17 @@ from __future__ import annotations
 import glob
 import importlib.util
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from meltify.converters.subtitle import parse_subtitles
+from meltify.evidence import Src, span
+from meltify.ffmpeg import Window
 from meltify.safe import MissingTool
 
 SUBTITLES = {".vtt", ".srt"}
+
+if TYPE_CHECKING:
+    from meltify.converters import Converted
 
 Cue = tuple[float, float, str]
 
@@ -58,9 +64,33 @@ def sidecars(path: Path) -> list[Path]:
     )
 
 
-def subtitles(
-    files: list[Path], start: float | None = None, end: float | None = None
-) -> tuple[Path, list[Cue]] | None:
+def recording(kind: str, src: Src, clip: Path | None, subs: list[Path]) -> Converted:
+    """The recording's transcript from `subs` when they have one, and a job for the rest
+
+    Subtitles are exact and free, so speech recognition only runs without them. With
+    --subs-only they're all there is, and no job is queued
+    """
+    from meltify.converters import Block, Converted, RecognizeJob
+    from meltify.converters.run import current
+
+    run = current()
+    out = Converted("media")
+    found = subtitles(subs, run.window)
+    if found:
+        out.blocks.append(Block(src, transcript(*found)))
+    elif run.subs_only:
+        out.needs.append("no subtitles")
+    if clip is not None and not run.subs_only:
+        out.jobs.append(RecognizeJob(kind, src, path=clip, listen=not found))
+    return out
+
+
+def transcript(sub: Path, cues: list[Cue]) -> str:
+    lines = [f"{span(start, end)}| {text}" for start, end, text in cues]
+    return "\n".join([f"> from subtitles {sub.name}", *lines])
+
+
+def subtitles(files: list[Path], window: Window) -> tuple[Path, list[Cue]] | None:
     """The first file with cues inside the window, and those cues
 
     Subtitles are free and exact, so they stand in for speech recognition when present
@@ -69,7 +99,8 @@ def subtitles(
         cues = [
             (s, e, text)
             for s, e, text in parse_subtitles(sub.read_text("utf-8", errors="replace"))
-            if (start is None or e >= start) and (end is None or s <= end)
+            if (window.start is None or e >= window.start)
+            and (window.end is None or s <= window.end)
         ]
         if cues:
             return sub, cues

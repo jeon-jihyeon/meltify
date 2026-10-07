@@ -14,7 +14,8 @@ openai_model = "gpt-5.5"
 [ocr]
 # auto uses installed local engines only. List paid ones here to add them
 engines = "auto"
-upscale = 3
+# Resize factor before OCR, 0 to size each picture on its own
+upscale = 0
 dpi = 300
 
 [asr]
@@ -28,7 +29,7 @@ lang = "auto"
 # jobs = 8
 # Seconds of uncached OCR and speech per run. A rerun picks up the rest
 # budget = 600
-# Scene frames to OCR per video
+# Frames kept and OCR'd per video, spread over it
 # frames = 20
 # Largest URL download in bytes
 # max_bytes = 20000000
@@ -42,27 +43,7 @@ lang = "auto"
 # quicklook = true
 
 [media]
-fps = 1.0
+# Interval frames per second on top of scene changes, 0 for none
+fps = 0
 scene = 0.3
 sub_langs = ["ko", "en"]
-
-[submit]
-url = "http://127.0.0.1:8765/submit"
-gap = 61
-field = "file"
-score_path = "result.similarity"
-goal = "max"
-until_score = 0.95
-
-[check]
-schema = "answer.schema.json"
-count = 30
-unique = ["id"]
-
-[[check.field]]
-path = "$[*].id"
-pattern = "item_[0-9]{3}"
-
-[brief]
-root = "problems"
-template = "en"

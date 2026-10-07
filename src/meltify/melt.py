@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from meltify import passwords
-from meltify.converters import Block, Converted, RecognizeJob, place
+from meltify.converters import Converted, RecognizeJob, place
+from meltify.converters.run import current
 from meltify.evidence import Src, finding
 from meltify.files import flat_name, fresh, member_name, unique_name, work_name
 from meltify.needs import ITEM_NOTE, error_note
@@ -37,6 +38,14 @@ FATAL = (KeyboardInterrupt, SystemExit, GeneratorExit)
 PYMUPDF = {"pdf"}
 # Embedded pictures bigger than this wait for OCR in a temp file instead of in memory
 PICTURE_SPILL_BYTES = 256 << 10
+# Rows that point at a place inside an item rather than at an item, each with how the
+# summary counts them and the table columns it adds
+DETAIL: dict[str, tuple[str, tuple[str, ...]]] = {
+    "disputed": ("disputed values", ("text",)),
+    "hidden": ("hidden spans", ("text", "reasons")),
+    "contrast": ("contrast pages", ("path",)),
+    "frame": ("frames", ("reasons", "path")),
+}
 
 
 def job_needs(jobs: list[RecognizeJob]) -> list[str]:
@@ -69,6 +78,7 @@ class Reader:
         names: dict[Path, str],
         *,
         shallow: bool = False,
+        defer: bool = False,
         fetch_opts: dict[str, Any] | None = None,
         whole: bool = False,
         media_conf: dict[str, Any] | None = None,
@@ -78,12 +88,16 @@ class Reader:
         # Folded the way unique_name compares them
         self.taken = {n.casefold() for n in names.values()}
         self.shallow = shallow
+        # Hold every item's markdown until recognition, so a run that fails there writes none
+        self.defer = defer
         self.fetch_opts = fetch_opts or {}
         self.whole = whole
         self.media_conf = media_conf or {}
         self.outputs: list[Output] = []
-        # URL media whose subtitles already gave the transcript
-        self.transcribed: set[Src] = set()
+        # Pictures only one engine read, counted once recognition is done
+        self.unchecked = 0
+        # Items read --hidden couldn't check, since their format has no hidden-text scan
+        self.hidden_unchecked = 0
         from meltify.converters.run import LOCK
 
         # PyMuPDF isn't thread-safe, and nested items can be PDFs too. Shared with the
@@ -189,14 +203,20 @@ class Reader:
             converted.jobs = [j for j in converted.jobs if j.src.img is None]
             converted.needs = job_needs(pictures) + converted.needs
         converted.jobs = [self._spilled(j) for j in converted.jobs]
+        if current().pdf.hidden and not converted.hidden_checked:
+            with self.out_lock:
+                self.hidden_unchecked += 1
         target = self.out_dir / f"{name}.md"
+        # Frames and renders from an earlier run would sit beside this run's in a grep
+        for made in ("frames", "contrast"):
+            shutil.rmtree(self.out_dir / "attachments" / name / made, ignore_errors=True)
         row.update(
             kind=converted.kind,
             needs=list(converted.needs),
             hidden=converted.hidden,
             out=str(target),
         )
-        if converted.jobs:
+        if converted.jobs or self.defer:
             with self.out_lock:
                 self.outputs.append(Output(converted, target, origin, row))
         else:
@@ -205,7 +225,7 @@ class Reader:
             row["chars"] = converted.chars
             target.parent.mkdir(parents=True, exist_ok=True)
             converted.write(target, origin)
-        rows = [row]
+        rows = [row, *self._details(converted, name, target)]
         children, converted.children = converted.children, []
         if not children:
             return rows
@@ -214,6 +234,7 @@ class Reader:
             return rows
         members: set[str] = set()
         stored: set[str] = set()
+        ready = []
         # Each member's bytes go once it's on disk, so a big archive isn't held in memory twice
         children.reverse()
         for i in range(1, len(children) + 1):
@@ -237,7 +258,29 @@ class Reader:
                     self.taken,
                     child_src.cite(),
                 )
+            ready.append((saved, child_src, child_out))
+        # Every member is on disk before any is melted, so a video finds the subtitles
+        # stored beside it whatever order the container lists them in
+        for saved, child_src, child_out in ready:
             rows += self.submit(self.one, saved, child_src, child_out, depth + 1)
+        return rows
+
+    def pictures(self) -> int:
+        """Images and PDF pages waiting for OCR"""
+        return sum(j.kind in ("image", "page") for o in self.outputs for j in o.converted.jobs)
+
+    def _details(self, converted: Converted, name: str, target: Path) -> list[dict[str, Any]]:
+        """Rows for the hidden spans and contrast renders of an item, as the run asked for"""
+        rows = [{**s, "chars": 0, "needs": [], "out": str(target)} for s in converted.spans]
+        renders, converted.renders = converted.renders, []
+        for at, file in renders:
+            saved = self.out_dir / "attachments" / name / "contrast" / file.name
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(file, saved)
+            shutil.rmtree(file.parent, ignore_errors=True)
+            rows.append(
+                finding(at, kind="contrast", path=str(saved), chars=0, needs=[], out=str(target))
+            )
         return rows
 
     def submit(self, fn: Callable[..., list[dict[str, Any]]], *args: Any) -> list[dict[str, Any]]:
@@ -319,39 +362,34 @@ class Reader:
             raise
         except BaseException as e:  # noqa: BLE001
             return [{**row, "error": error_note(e, ITEM_NOTE)}]
-        origin = " ".join([src.cite(), *(f"{k}={v}" for k, v in meta.items() if v)])
+        # The URL as given goes last, so a rerun that fails to fetch it can still tell which
+        # markdown the redirect target came from
+        origin = " ".join([src.cite(), *(f"{k}={v}" for k, v in {**meta, "url": url}.items() if v)])
         return self.keep(converted, name, 0, row, origin)
 
     def _media(self, url: str, src: Src, work: Path) -> Converted:
         from meltify import video
-        from meltify.recognize import span
 
         if self.shallow:
             return Converted("media", needs=["media"])
+        run = current()
         clip, subs = video.download(
             url,
             work,
             list(self.media_conf["sub_langs"]),
-            False,
+            run.subs_only,
             int(self.media_conf["max_height"]),
             bool(self.fetch_opts.get("allow_private")),
         )
-        out = Converted("media")
-        if found := video.subtitles(subs):
-            lines = [f"{span(s, e)}| {text}" for s, e, text in found[1]]
-            out.blocks.append(Block(src, "\n".join(lines)))
-            self.transcribed.add(src)
-        if clip is not None:
-            out.jobs.append(RecognizeJob("video", src, path=clip))
-        return out
+        return video.recording("video", src, clip, subs)
 
     def finish(self, recognize: Callable[..., list[Any]] | None) -> list[dict[str, Any]]:
-        """Fold recognized text into each item, write its markdown and return disputed rows"""
+        """Fold recognized text into each item, write its markdown and return its detail rows"""
         # Workers finish in any order, while OCR's budget goes to jobs in the order given
         self.outputs.sort(key=lambda o: o.row["cite"])
         jobs = [j for o in self.outputs for j in o.converted.jobs]
-        outcomes = recognize(jobs, self.transcribed) if recognize and jobs else None
-        disputed: list[dict[str, Any]] = []
+        outcomes = recognize(jobs) if recognize and jobs else None
+        details: list[dict[str, Any]] = []
         n = 0
         for o in self.outputs:
             mine = o.converted.jobs
@@ -369,9 +407,11 @@ class Reader:
                 ]
                 o.converted.blocks = place(o.converted.blocks, [b for g in got for b in g.blocks])
                 for g in got:
-                    disputed += [
+                    details += [
                         {**d, "chars": 0, "needs": [], "out": str(o.target)} for d in g.disputed
                     ]
+                    details += self._frames(g.frames, o.target)
+                    self.unchecked += g.unchecked
                 # Tells a blank scan apart from one nothing could read. Single pictures inside a
                 # document stay quiet, since most of them are photos and logos
                 if mine and not left and not o.converted.chars:
@@ -381,4 +421,15 @@ class Reader:
             o.row["chars"] = o.converted.chars
             o.target.parent.mkdir(parents=True, exist_ok=True)
             o.converted.write(o.target, o.origin)
-        return disputed
+        return details
+
+    def _frames(self, frames: list[dict[str, Any]], target: Path) -> list[dict[str, Any]]:
+        """Frame rows with each picture copied beside the item's markdown"""
+        rows = []
+        for f in frames:
+            file = Path(f.pop("file"))
+            saved = self.out_dir / "attachments" / target.stem / "frames" / file.name
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(file, saved)
+            rows.append({**f, "path": str(saved), "chars": 0, "needs": [], "out": str(target)})
+        return rows

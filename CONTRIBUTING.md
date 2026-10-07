@@ -33,7 +33,7 @@ After you change the version in `pyproject.toml` or the launcher template, run `
   - `blips`: the drawing records and picture store Word and PowerPoint binaries share, read by `doc` and `ppt`
   - `tables`: markdown tables a reader can cite cell by cell
   - `fallback`: the last resort for binary files no converter reads
-- `src/meltify/forensics/`: the PDF hidden-text checks behind `hidden` and the `hidden` column of `read`
+- `src/meltify/forensics/`: the PDF hidden-text checks behind the `hidden` column and `--hidden` rows of `read`
 - `src/meltify/fetch.py`: URL downloads for `read`, with the address, redirect and `robots.txt` checks
 - `src/meltify/needs.py` and `src/meltify/passwords.py`: the wording of `needs` lines, so every converter reports the same gap the same way
 - `src/meltify/safe.py`: the subprocess runner that kills a whole process group on timeout

@@ -1,10 +1,10 @@
 ---
 name: meltify-read
-description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images and recordings, into cited markdown, with images, scans and recordings read by local OCR and speech engines, and list which items still need OCR, transcription or a hidden-text check. Use whenever an answer, summary or document is built from such files or pages, even one or two named files or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip or curl, so every fact can be quoted with its page, cell, line, attachment or timestamp.
+description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images, screenshots, scans, recordings and video URLs, into cited markdown. Images and scans are read by several OCR engines that flag the numbers they disagree on, recordings are transcribed with frames kept, and PDFs are checked for hidden text. Use whenever an answer, summary or document is built from such files or pages, even one named file, one image or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip, ffmpeg or curl, so every fact can be quoted with its page, cell, line, box or timestamp. Never answer from a single reading of an image.
 license: MIT
-compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look.
+compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look. Recordings need ffmpeg, video URLs the media extra.
 metadata:
-  version: "0.2.4"
+  version: "0.3.0"
   cli: meltify read
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -26,6 +26,27 @@ Turn every input into markdown where each block starts with a citation, then wor
    - Never pass `--password`, which other users can see, and never repeat the password in your answer
 7. If `meltify` isn't on PATH, run this skill's `scripts/run read ...` by its full path. In Claude Code that's `${CLAUDE_SKILL_DIR}/scripts/run`.
 8. Output lands in `meltify-out/read/`: one `.md` per item, plus `index.jsonl`. A rerun into the same folder removes the previous markdown of items this run didn't name at all. An item that failed this run keeps its previous markdown, so check its row for an `error` before you quote that file.
+
+## Look closer
+
+The same command takes a closer look when one image, PDF or video matters. Each option below adds rows or files to the same output.
+
+- One image or scanned page:
+  - `--engines vision,gemini` replaces the default engines, here adding a paid one. Name one only when the user agrees, and use `paddle` instead of `vision` on Linux. See `references/engines.md`
+  - `--reading agent=FILE` compares your own reading as one more engine. Look at the image or PDF page yourself with Read, write what you see to FILE one line per line of text, and give exactly one image, or one PDF with `--pages N`
+  - `--ocr-pages` OCRs PDF pages that have a text layer too. Without it only scanned pages and large pictures are OCR'd, so add it to check a text layer against the page, or before `--reading` on such a page
+  - `--equalize` for faint or low-contrast text, `--upscale 3` for a fixed resize, and `--compare tokens` to compare words as well as numbers
+  - A value counts as agreed only when two or more engines read it the same number of times and at least one of them is local
+- PDFs:
+  - `--hidden` checks PDFs, and lists every hidden span as a row of kind `hidden`, with its `text`, the `reasons` it's hidden and a cite such as `doc.pdf#p2@pt(72,95,140,103)`. Reasons are render mode 3, opacity, size, off page, layer, color matches background, and covered by a later fill
+  - `--contrast` also saves each page rendered in stretched contrast, as rows of kind `contrast` with the picture's `path`, for text drawn inside images
+  - `--pages 1,3-5` limits every PDF in the run to those pages
+- Recordings and videos:
+  - Each video gets rows of kind `frame` with a JPEG `path` under `attachments/` and a cite with its time. Its `reasons` say `scene` for a scene change or `interval` for a regular sample. Up to `--frames N` (20) are kept, spread over the video, and OCR'd. `--frames 0` skips frames
+  - Only scene changes are taken by default, so a slow change can slip by. `--fps 2` adds interval frames, and since they count toward `--frames` too, raise it with them. A warning says when the cap dropped frames
+  - `--start 600 --end 780` narrows to a window, in seconds. Find it first from the transcript
+  - `--scene 0.2` catches subtler scene changes, `--keep-duplicates` keeps near-identical frames, marked with the time they repeat, and `--asr mlx` names the speech engine
+  - `--subs-only` takes the transcript from subtitles alone, from a URL or from a `.vtt` or `.srt` file beside the video, and skips speech recognition and frames
 
 ## Read the output
 
@@ -62,10 +83,13 @@ The `needs` column lists follow-up work:
 - Unread pictures, pages or recordings:
   - `ocr pages 2,5`, `ocr`, `ocr 3 images` or `media`: no local engine was available, or `--shallow` skipped it. Use the meltify-doctor skill, or rerun without `--shallow`
   - `ocr (budget)` or `media (budget)`: the time budget ran out. Rerun with a higher `--budget`
-  - `ocr (failed)`: the engines couldn't read it. Run the meltify-ocr skill on that item
+  - `ocr (failed)`: the engines couldn't read it. Look at the image yourself, then rerun with `--reading` or another engine
   - `... not read (not drawn under --shallow)`: a picture or slide only OCR could read. Rerun without `--shallow`
   - `no text found`: the engines read every picture or recording of the item and found nothing. It may really be blank. If you expected text, check `--lang`, or look at the image yourself
-- `hidden N spans`: a PDF holds text a reader can't see. Run the meltify-hidden skill before quoting that page
+- `hidden N spans`: a PDF holds text a reader can't see. Rerun with `--hidden` before quoting that page
+- `hidden N texts`: an SVG holds text a viewer can't see, marked `[hidden]` in its markdown. Keep it apart from visible text
+- `no subtitles`: `--subs-only` found no captions for that recording. Rerun without it to transcribe the speech
+- `no pages in 7, it has 3`: `--pages` selected nothing in that PDF
 - `hidden sheets NAME`: those sheets are hidden in the workbook but already melted under their own cite. Say so if you quote them
 - `render`: the page looks script-built. Rerun with `--render`
 - A missing part. Install it once the user agrees:
@@ -86,8 +110,13 @@ The `needs` column lists follow-up work:
 
 ## Gotchas
 
-- In the melted markdown, PDF text includes hidden spans as if they were visible, and text placed off the page is dropped. When `needs` says `hidden N spans`, run the meltify-hidden skill before quoting that page.
-- A disputed or unchecked value isn't confirmed. Look at the image yourself or run the meltify-ocr skill on it before you rely on it.
+- In the melted markdown, PDF text includes hidden spans as if they were visible, and text placed off the page is dropped. When `needs` says `hidden N spans`, rerun with `--hidden` before quoting that page.
+- Text drawn inside images never shows up as a hidden span. Use `--contrast`, then look at the rendered pages.
+- A span's background comes from a fill only when a single fill fully contains it. Otherwise white is assumed, so light text on a dark picture, or a shape that only partly covers text, can be missed or flagged wrongly. Check those pages in the `--contrast` render.
+- A disputed or unchecked value isn't confirmed. Look at the image yourself, or rerun with `--reading`, before you rely on it.
+- On macOS 27, Apple Vision applies only the first language. Pass `--lang` with the language of the text, like `--lang en`, not the language of the task.
+- Consecutive frames with a near-identical layout and brightness are skipped. A small change, like one digit of a counter, can get skipped along with them. Add `--keep-duplicates` when you're counting or comparing small details.
+- The speech engine detects the spoken language per file, since `asr.lang` is `auto` by default. If a transcript comes out in the wrong language, set `asr.lang` in `meltify.toml`, or `MELTIFY_ASR_LANG`, to the language spoken.
 - Linux has no Apple Vision, so with PaddleOCR alone every reading ends with `unchecked`.
 - With `--shallow`, or when the budget runs out, an image or a scanned page melts to little or no text. Missing text there means unread, not empty. `--shallow` also skips the rendering fallback, so a file only it could read stays `unsupported format`.
 - A file that stays encrypted gets no markdown at all, only its row with the `needs` line.
@@ -98,5 +127,6 @@ The `needs` column lists follow-up work:
 ## Then
 
 1. Search the melted markdown with Grep instead of loading every file into context.
-2. Quote each fact with the citation of the block or OCR line it came from.
-3. Finish every item in `needs` and check every disputed value before answering from that item, or say which items weren't checked.
+2. Quote each fact with the citation of the block, OCR line or frame it came from. Keep hidden text apart from visible text, with the reason it's hidden. If `--hidden` found nothing, say so, and say whether you used `--contrast`.
+3. For a video, grep the transcript for when something is said, then open only the frames near that time with Read.
+4. Finish every item in `needs` and check every disputed value before answering from that item, or say which items weren't checked. If a value stays uncertain, give its cite instead of picking one.

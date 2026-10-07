@@ -18,6 +18,11 @@ def clock(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{d}"
 
 
+def span(start: float, end: float) -> str:
+    """The time part of a cite, so a transcript line reads as a suffix of its block's cite"""
+    return f"@{clock(start)}-{clock(end)}"
+
+
 def coordinate(v: float) -> str:
     return f"{v:g}" if float(v).is_integer() else f"{v:.1f}"
 

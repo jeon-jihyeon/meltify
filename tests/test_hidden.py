@@ -3,9 +3,18 @@ import json
 import pytest
 
 from meltify.cli import main
-from meltify.files import parse_pages
-from meltify.forensics.pdf import luminance, scan
+from meltify.files import Pages
+from meltify.forensics.pdf import DEFAULT_LIMITS, luminance, scan_page
 from tests.fixtures.make_pdf import HIDDEN, VISIBLE, hidden_pdf, image_text_pdf, white_on_image_pdf
+
+
+def scan(path, pages=None):
+    """Every hidden span of the PDF at `path`, page by page"""
+    import pymupdf
+
+    with pymupdf.open(path) as doc:
+        numbers = range(1, doc.page_count + 1) if pages is None else pages
+        return [s for n in numbers for s in scan_page(doc[n - 1], n, DEFAULT_LIMITS)]
 
 
 def test_finds_every_hiding_technique_without_false_positives(tmp_path):
@@ -24,14 +33,38 @@ def test_luminance_handles_gray_rgb_and_cmyk():
     assert round(luminance((0, 0, 0, 0)), 3) == 1
 
 
-def test_cli_cites_page_and_box(tmp_path, monkeypatch, capsys):
+def _details(capsys, kind):
+    out = json.loads(capsys.readouterr().out)
+    return out, [r for r in out["results"] if r["kind"] == kind]
+
+
+def test_read_hidden_lists_each_span_with_page_and_box(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     pdf = hidden_pdf(tmp_path / "h.pdf")
-    assert main(["hidden", str(pdf), "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    cites = [r["cite"] for r in out["results"]]
-    assert all(c.startswith(f"{pdf}#p1@pt(") for c in cites)
-    assert len(cites) == len(HIDDEN)
+    assert main(["read", str(pdf), "--shallow", "--json"]) == 0
+    out, spans = _details(capsys, "hidden")
+    assert spans == [] and out["results"][0]["hidden"] == len(HIDDEN)
+    assert main(["read", str(pdf), "--shallow", "--hidden", "--json"]) == 0
+    out, spans = _details(capsys, "hidden")
+    assert {r["text"] for r in spans} == set(HIDDEN)
+    assert all(r["cite"].startswith(f"{pdf}#p1@pt(") for r in spans)
+    assert all(r["out"] == out["results"][0]["out"] for r in spans)
+    # Every span is listed, so nothing is left to follow up
+    assert out["results"][0]["needs"] == []
+    assert f"{len(HIDDEN)} hidden spans" in out["summary"]
+
+
+def test_hidden_spans_of_a_nested_pdf_cite_through_the_archive(tmp_path, monkeypatch, capsys):
+    import zipfile
+
+    monkeypatch.chdir(tmp_path)
+    pdf = hidden_pdf(tmp_path / "h.pdf")
+    with zipfile.ZipFile(tmp_path / "a.zip", "w") as z:
+        z.write(pdf, "docs/h.pdf")
+    assert main(["read", "a.zip", "--shallow", "--hidden", "--json"]) == 0
+    _, spans = _details(capsys, "hidden")
+    assert len(spans) == len(HIDDEN)
+    assert all(r["cite"].startswith("a.zip#att=docs/h.pdf#p1@pt(") for r in spans)
 
 
 def test_contrast_renders_pages_for_text_inside_images(tmp_path, monkeypatch, capsys):
@@ -40,37 +73,50 @@ def test_contrast_renders_pages_for_text_inside_images(tmp_path, monkeypatch, ca
 
     monkeypatch.chdir(tmp_path)
     pdf = image_text_pdf(tmp_path / "img.pdf")
-    assert main(["hidden", str(pdf), "--contrast", "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["results"] == []
-    image = Image.open(out["artifacts"][0]["path"]).convert("L")
+    assert main(["read", str(pdf), "--shallow", "--hidden", "--contrast", "--json"]) == 0
+    out, renders = _details(capsys, "contrast")
+    assert [r["cite"] for r in renders] == [f"{pdf}#p1"]
+    assert _details_of(out, "hidden") == []
+    image = Image.open(renders[0]["path"]).convert("L")
     # The faint text becomes visible as a wide spread of tones
     assert np.asarray(image).std() > 20
+    assert "/attachments/img.pdf/contrast/" in renders[0]["path"]
 
 
-def test_parse_pages():
-    assert parse_pages(None, 3) == [1, 2, 3]
-    assert parse_pages("1,3-5", 6) == [1, 3, 4, 5]
-    assert parse_pages("2,2", 3) == [2]
+def _details_of(out, kind):
+    return [r for r in out["results"] if r["kind"] == kind]
 
 
-@pytest.mark.parametrize("spec", ["9", "1,3-5,9", "0", "5-3", "1,", "", "a", "1-"])
-def test_parse_pages_rejects_bad_specs(spec):
+def test_pages_parse_and_select():
+    assert Pages.parse("1,3-5").of(6) == [1, 3, 4, 5]
+    assert Pages.parse("2,2").of(3) == [2]
+    # A range past the end selects what's there, since read applies it to every PDF
+    assert Pages.parse("2-9").of(3) == [2, 3]
+
+
+@pytest.mark.parametrize("spec", ["0", "5-3", "1,", "", "a", "1-"])
+def test_pages_reject_bad_specs(spec):
     with pytest.raises(ValueError):
-        parse_pages(spec, 6)
+        Pages.parse(spec)
 
 
-@pytest.mark.parametrize("spec", ["9", "2-1", "1,"])
-def test_cli_rejects_pages_it_cannot_select(tmp_path, monkeypatch, capsys, spec):
+def test_pages_limit_what_read_melts_and_scans(tmp_path, monkeypatch, capsys):
+    import pymupdf
+
     monkeypatch.chdir(tmp_path)
-    pdf = hidden_pdf(tmp_path / "h.pdf")
-    assert main(["hidden", str(pdf), "--pages", spec, "--json"]) == 2
-    assert json.loads(capsys.readouterr().out)["results"] == []
-
-
-def test_empty_page_selection_is_not_all_pages(tmp_path):
-    with pytest.raises(ValueError):
-        scan(str(hidden_pdf(tmp_path / "h.pdf")), [])
+    doc = pymupdf.open()
+    for n in range(3):
+        doc.new_page().insert_text((72, 72), f"page {n + 1} text")
+    doc.save(tmp_path / "three.pdf")
+    assert main(["read", "three.pdf", "--pages", "2-3", "--json"]) == 0
+    md = (tmp_path / "meltify-out/read/three.pdf.md").read_text()
+    assert "page 1 text" not in md and "page 2 text" in md and "page 3 text" in md
+    capsys.readouterr()
+    assert main(["read", "three.pdf", "--pages", "7", "--json"]) == 0
+    [row] = json.loads(capsys.readouterr().out)["results"]
+    assert row["needs"] == ["no pages in 7, it has 3"]
+    with pytest.raises(SystemExit):
+        main(["read", "three.pdf", "--pages", "2-1"])
 
 
 def test_white_text_over_dark_image_is_not_hidden(tmp_path):
@@ -198,20 +244,32 @@ def test_pdf_read_traces_each_page_once(tmp_path, monkeypatch):
     assert out.jobs == [] and out.hidden == 3
 
 
-@pytest.mark.parametrize("name", ["notes.md", "blob.bin"])
-def test_non_pdf_input_is_a_usage_error(tmp_path, monkeypatch, capsys, name):
+def test_the_old_command_still_runs_with_a_warning(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    # PyMuPDF opens markdown as a document, and random bytes not at all
-    path = tmp_path / name
-    path.write_bytes(
-        b"# heading\n\nplain text\n" if name.endswith(".md") else bytes(range(256)) * 8
+    pdf = hidden_pdf(tmp_path / "h.pdf")
+    assert main(["hidden", str(pdf), "--json"]) == 0
+    out, spans = _details(capsys, "hidden")
+    assert out["command"] == "read" and len(spans) == len(HIDDEN)
+    assert out["warnings"][0] == (
+        "meltify hidden is deprecated and will be removed in 0.4.0,"
+        " use meltify read --hidden instead"
     )
-    assert main(["hidden", str(path), "--json"]) == 2
-    out = json.loads(capsys.readouterr().out)
-    assert out["errors"][0]["message"] == f"{path} isn't a PDF, run meltify read on it instead"
 
 
-def test_missing_pdf_is_a_usage_error(tmp_path, monkeypatch, capsys):
+def test_hidden_says_what_it_left_unchecked(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    assert main(["hidden", "nope.pdf", "--json"]) == 2
-    assert json.loads(capsys.readouterr().out)["errors"][0]["message"] == "no such file: nope.pdf"
+    (tmp_path / "notes.md").write_text("plain\n")
+    image_text_pdf(tmp_path / "img.pdf")
+    assert main(["read", "notes.md", "img.pdf", "--shallow", "--hidden", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["summary"].endswith(", 0 hidden spans")
+    assert "--hidden checks PDFs and SVGs only, so 1 other item went unchecked" in out["warnings"]
+    assert any("add --contrast" in w for w in out["warnings"])
+
+
+def test_the_table_shows_what_hidden_rows_found(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    hidden_pdf(tmp_path / "h.pdf")
+    assert main(["read", "h.pdf", "--shallow", "--hidden", "--contrast"]) == 0
+    header = capsys.readouterr().out.splitlines()[0].split()
+    assert header == ["kind", "chars", "needs", "out", "text", "reasons", "path", "cite"]

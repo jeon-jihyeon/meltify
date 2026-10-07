@@ -33,7 +33,7 @@ def test_missing_base_module_exits_three(monkeypatch, tmp_path):
     real = importlib.util.find_spec
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        importlib.util, "find_spec", lambda n, *a: None if n == "jsonschema" else real(n, *a)
+        importlib.util, "find_spec", lambda n, *a: None if n == "openpyxl" else real(n, *a)
     )
     assert main(["doctor", "--quick"]) == 3
 
