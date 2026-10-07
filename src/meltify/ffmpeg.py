@@ -52,10 +52,6 @@ def _has_stream(path: Path, kind: str) -> bool:
     return bool(out.stdout.strip())
 
 
-def has_video(path: Path) -> bool:
-    return _has_stream(path, "v")
-
-
 def has_audio(path: Path) -> bool:
     return _has_stream(path, "a")
 

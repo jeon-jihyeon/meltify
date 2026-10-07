@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  # uv.lock records a 7 day release-age cutoff, so CI resolves with the same one
+  # uv.lock records a 7-day release-age cutoff, so CI resolves with the same one
   UV_EXCLUDE_NEWER: 7 days
 
 jobs:

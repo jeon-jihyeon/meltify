@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from meltify import ffmpeg, safe
-from meltify.converters import Block, Converted, RecognizeJob, run
+from meltify.converters import Block, Converted, RecognizeJob, recording, run
 from meltify.evidence import Src
 from meltify.needs import LIBREOFFICE, error_note
 
@@ -243,7 +243,8 @@ def convert(path: Path, src: Src, need: str = NEED) -> Converted:
 
         out = raster.convert(path, src)
     elif _media_like(head) and (kind := ffmpeg.media_kind(path)) is not None:
-        out = Converted("media", jobs=[RecognizeJob(kind, src, path=path)])
+        # The same path as a recording read by name, so subtitles and --subs-only apply
+        out = recording(kind, path, src)
     else:
         out = None
         if suffix not in SOFFICE:

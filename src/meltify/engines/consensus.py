@@ -64,12 +64,11 @@ def tally(v: Verdict) -> str:
     return ", ".join(f"{name} {n}" for name, n in v.counts.items())
 
 
-def disputed_row(src: Src, v: Verdict, **extra: Any) -> dict[str, Any]:
+def disputed_row(src: Src, v: Verdict) -> dict[str, Any]:
     """The result row for a value the engines dispute, cited at `src`"""
     return finding(
         src,
-        **extra,
-        type="disputed",
+        kind="disputed",
         value=v.value,
         counts=v.counts,
         text=f"{v.value}  ({tally(v)})",

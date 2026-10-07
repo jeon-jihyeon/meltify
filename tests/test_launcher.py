@@ -69,7 +69,7 @@ def _venv(data: Path, version: str = VERSION) -> None:
 def test_venv_from_doctor_install(sandbox):
     launcher, _, env, home = sandbox
     _venv(home / ".local/share/meltify")
-    assert _run(launcher, env, "ocr", "a.png").stdout.strip() == "venv ocr a.png"
+    assert _run(launcher, env, "read", "a.png").stdout.strip() == "venv read a.png"
 
 
 def test_venv_beats_same_version_on_path(sandbox):
@@ -103,13 +103,13 @@ def test_plugin_data_dir_and_extras_and_git(sandbox, tmp_path):
     # CLAUDE_PLUGIN_DATA replaces the default data dir, so the HOME venv is ignored
     env.update({"CLAUDE_PLUGIN_DATA": str(plugin_data)})
     env.update({"MELTIFY_EXTRAS": "media,asr-mlx", "MELTIFY_FROM_GIT": "1"})
-    out = _run(launcher, env, "media", "x").stdout.strip()
+    out = _run(launcher, env, "read", "x").stdout.strip()
     assert out == (
         f"uvx --quiet --from meltify[media,asr-mlx] @ "
-        f"git+https://github.com/jeon-jihyeon/meltify@v{VERSION} meltify media x"
+        f"git+https://github.com/jeon-jihyeon/meltify@v{VERSION} meltify read x"
     )
     (plugin_data / "venv/.meltify-version").write_text(VERSION)
-    assert _run(launcher, env, "media", "x").stdout.strip() == "venv media x"
+    assert _run(launcher, env, "read", "x").stdout.strip() == "venv read x"
 
 
 def test_nothing_found_exits_one_with_hint(sandbox):

@@ -46,13 +46,6 @@ def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-
 def emit(
     env: Envelope,
     *,

@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from meltify.converters import Block, Child, Converted, RecognizeJob
 from meltify.converters.limits import MAX_MEMBER_BYTES, human_bytes
-from meltify.evidence import Src
+from meltify.converters.run import PdfLook
+from meltify.evidence import Src, finding
+from meltify.files import doc_pages
+from meltify.forensics.pdf import DEFAULT_LIMITS, HiddenSpan, Marks, scan_page
 from meltify.needs import error_note
-
-if TYPE_CHECKING:
-    from meltify.forensics.pdf import Marks
 
 # A page with less text than this is probably a scan
 SCAN_CHARS = 20
@@ -161,28 +162,45 @@ def _attachments(doc: Any, src: Src, out: Converted) -> None:
 
 
 def convert(path: Path, src: Src) -> Converted:
+    from meltify.converters.run import current
+
+    return melt(path, src, current().pdf)
+
+
+def melt(path: Path, src: Src, look: PdfLook) -> Converted:
+    """The PDF read the way `look` asks, which convert takes from the run"""
     import pymupdf
 
     from meltify import imaging
-    from meltify.forensics.pdf import DEFAULT_LIMITS, Marks, scan_page
 
     suffix = path.suffix.lower()
     out = Converted("pdf")
+    out.hidden_checked = suffix not in MUPDF
     with pymupdf.open(path, filetype=suffix[1:] if suffix in MUPDF else None) as doc:
         xrefs = _Xrefs(doc)
-        for i, page in enumerate(doc, start=1):
+        numbers = doc_pages(look.pages, doc.page_count)
+        if look.pages is not None and not numbers:
+            out.needs.append(f"no pages in {look.pages.spec}, it has {doc.page_count}")
+        for i in numbers:
+            page = doc[i - 1]
             # The hidden text check and the scan layer check read the same draw log
             marks = Marks(page)
-            if suffix not in MUPDF:
-                out.hidden += sum(1 for _ in scan_page(page, i, DEFAULT_LIMITS, marks))
+            if out.hidden_checked:
+                spans = list(scan_page(page, i, DEFAULT_LIMITS, marks))
+                out.hidden += len(spans)
+                if look.hidden:
+                    out.spans += [_span_row(s, src) for s in spans]
+            if look.contrast_dpi is not None:
+                out.renders.append((replace(src, page=i), _contrast(page, look.contrast_dpi)))
             text = page.get_text("text").strip()
             if text:
                 out.blocks.append(Block(replace(src, page=i), text))
             if doc.is_pdf:
                 out.blocks += _notes(page, replace(src, page=i))
-            if len(text) < SCAN_CHARS:
+            if len(text) < SCAN_CHARS or look.ocr_pages:
                 # A full-page image with no text is a scan. OCR the rendered page instead of
-                # its images, so text drawn on top of them is read too
+                # its images, so text drawn on top of them is read too. --ocr-pages does the
+                # same for a page with a text layer, to check that layer against the pixels
                 out.jobs.append(RecognizeJob("page", replace(src, page=i), path=path))
                 continue
             for n, info in enumerate(page.get_image_info(), start=1):
@@ -216,6 +234,36 @@ def convert(path: Path, src: Src) -> Converted:
                 )
         if doc.is_pdf:
             _attachments(doc, src, out)
-    if out.hidden:
+    # --hidden lists every span as a row, so only a plain read leaves them as a need
+    if out.hidden and not look.hidden:
         out.needs.append(f"hidden {out.hidden} spans")
     return out
+
+
+def _span_row(s: HiddenSpan, src: Src) -> dict[str, Any]:
+    return finding(
+        replace(src, page=s.page, bbox=s.bbox, unit="pt"),
+        kind="hidden",
+        text=s.text,
+        reasons=list(s.reasons),
+        color=s.color,
+        background=s.background,
+        size=s.size,
+        opacity=s.opacity,
+    )
+
+
+def _contrast(page: Any, dpi: int) -> Path:
+    """The page drawn with stretched contrast into a folder the reader moves it out of
+
+    Text close to its background, even inside a picture, stands out there. A plain temp
+    folder, since a PDF worker process would remove a run workdir when it exits
+    """
+    from PIL import Image
+
+    from meltify import imaging
+
+    pix = page.get_pixmap(dpi=dpi)
+    image = imaging.equalize(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+    folder = Path(tempfile.mkdtemp(prefix="meltify-contrast-"))
+    return imaging.save(image, folder / f"p{page.number + 1}.contrast.png")
