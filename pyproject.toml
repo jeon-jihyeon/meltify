@@ -75,6 +75,11 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
+[tool.uv]
+# Only releases at least 7 days old, so a fresh compromised upload can't reach the lock.
+# Kept here, not just in CI, so every tool that relocks, Dependabot included, applies it
+exclude-newer = "7 days"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
