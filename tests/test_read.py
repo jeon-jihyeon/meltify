@@ -1,3 +1,4 @@
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -281,6 +282,95 @@ def test_shallow_lists_embedded_pictures_like_a_read_without_engines(tmp_path, m
     assert shallow == needs[0]
 
 
+def test_pictures_are_saved_small_and_linked_without_counting_as_text(
+    tmp_path, monkeypatch, capsys
+):
+    from PIL import Image
+
+    docx = embedded_docx(tmp_path / "pics.docx", card("CHART 42", (4032, 3024)))
+    code, out = _rows(tmp_path, monkeypatch, capsys, docx)
+    row = out["results"][0]
+    md = Path(row["out"]).read_text()
+    link = next(line for line in md.splitlines() if line.startswith("![picture]("))
+    picture = Path(row["out"]).parent / link.removeprefix("![picture](").removesuffix(")")
+    with Image.open(picture) as im:
+        assert im.format == "WEBP"
+        assert max(im.size) <= 1568 and im.size[0] * im.size[1] <= 1_150_000
+    assert "pics.docx#para3#img1" in md.split(link)[0].splitlines()[-1]
+
+    code, out = _rows(tmp_path, monkeypatch, capsys, docx, "--no-pictures")
+    assert out["results"][0]["chars"] == row["chars"]
+    assert "![picture]" not in Path(out["results"][0]["out"]).read_text()
+    assert not picture.parent.exists()
+
+
+def test_the_same_picture_twice_links_one_file(tmp_path):
+    from meltify.converters import Converted, RecognizeJob
+    from meltify.evidence import Src
+    from meltify.melt import Reader, _link_pictures
+
+    data = card("SAME", (300, 200))
+    jobs = [RecognizeJob("image", Src("a.docx", para=n, img=1), data=data) for n in (1, 2)]
+    links = Reader(tmp_path, {}, webp=(1568, 50))._save_pictures([("a.docx", j) for j in jobs])
+    converted = Converted("office", jobs=jobs)
+    _link_pictures(converted, jobs, links)
+    assert len(converted.blocks) == 2 and len({b.text for b in converted.blocks}) == 1
+    assert len(list((tmp_path / "attachments" / "a.docx" / "pictures").iterdir())) == 1
+
+
+def _tiff(path, *texts):
+    from PIL import Image
+
+    frames = [Image.open(io.BytesIO(card(t, (300, 120)))).convert("RGB") for t in texts]
+    frames[0].save(path, save_all=True, append_images=frames[1:])
+    return path
+
+
+def _links(row):
+    md = Path(row["out"]).read_text()
+    return [line for line in md.splitlines() if line.startswith("![picture](")]
+
+
+def test_each_frame_of_a_tiff_gets_its_own_picture(tmp_path, monkeypatch, capsys):
+    tif = _tiff(tmp_path / "fax.tif", "PAGE ONE", "PAGE TWO")
+    row = _rows(tmp_path, monkeypatch, capsys, tif)[1]["results"][0]
+    md = Path(row["out"]).read_text()
+    assert len(set(_links(row))) == 2
+    assert md.index("fax.tif#frame1") < md.index("fax.tif#frame2")
+
+
+def test_a_picture_pillow_cant_decode_gets_no_link(tmp_path, monkeypatch, capsys):
+    bad = tmp_path / "broken.png"
+    bad.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+    row = _rows(tmp_path, monkeypatch, capsys, bad)[1]["results"][0]
+    assert not _links(row)
+
+
+def test_picture_side_zero_saves_none(tmp_path, monkeypatch, capsys):
+    (tmp_path / "meltify.toml").write_text("[read]\npicture_side = 0\n")
+    png = tmp_path / "menu.png"
+    png.write_bytes(card("MENU", (300, 120)))
+    row = _rows(tmp_path, monkeypatch, capsys, png)[1]["results"][0]
+    assert not _links(row)
+
+
+def test_a_rerun_reuses_pictures_and_a_failed_one_keeps_them(tmp_path, monkeypatch, capsys):
+    tif = _tiff(tmp_path / "fax.tif", "PAGE ONE", "PAGE TWO")
+    row = _rows(tmp_path, monkeypatch, capsys, tif)[1]["results"][0]
+    folder = Path(row["out"]).parent / "attachments" / "fax.tif" / "pictures"
+    before = {f.name: f.stat().st_mtime_ns for f in folder.iterdir()}
+    _rows(tmp_path, monkeypatch, capsys, tif)
+    assert {f.name: f.stat().st_mtime_ns for f in folder.iterdir()} == before
+    # --reading fails after conversion when the item holds two pictures, before any write
+    reading = tmp_path / "reading.txt"
+    reading.write_text("PAGE ONE")
+    code, _ = _rows(tmp_path, monkeypatch, capsys, tif, "--reading", f"me={reading}")
+    assert code == 2
+    md = Path(row["out"]).read_text()
+    assert all((Path(row["out"]).parent / link[11:-1]).is_file() for link in _links(row))
+    assert len(_links(row)) == 2 and md
+
+
 def test_a_bundle_folder_given_alone_keeps_its_own_name(tmp_path):
     from meltify import files
 
@@ -477,3 +567,11 @@ def test_a_failed_url_keeps_the_markdown_its_redirect_target_wrote(tmp_path):
     assert md.exists()
     drop_stale(tmp_path, [{"cite": "https://x.org/b", "out": None}])
     assert not md.exists()
+
+
+@pytest.mark.parametrize("old", ["ocr", "hidden", "media"])
+def test_commands_folded_into_read_are_gone(old, capsys):
+    with pytest.raises(SystemExit) as e:
+        main([old, "x.png"])
+    assert e.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

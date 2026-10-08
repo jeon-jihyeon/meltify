@@ -1,10 +1,10 @@
 ---
 name: meltify-read
-description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images, screenshots, scans, recordings and video URLs, into cited markdown. Images and scans are read by several OCR engines that flag the numbers they disagree on, recordings are transcribed with frames kept, and PDFs are checked for hidden text. Use whenever an answer, summary or document is built from such files or pages, even one named file, one image or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip, ffmpeg or curl, so every fact can be quoted with its page, cell, line, box or timestamp. Never answer from a single reading of an image.
+description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images, screenshots, scans, recordings and video URLs, into cited markdown. Images and scans can be cross-checked by several OCR engines, including your own reading, which flag the numbers they disagree on, recordings are transcribed with frames kept, and PDFs are checked for hidden text. Use whenever an answer, summary or document is built from such files or pages, even one named file, one image or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip, ffmpeg or curl, so every fact can be quoted with its page, cell, line, box or timestamp. Never answer from a single reading of an image.
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look. Recordings need ffmpeg, video URLs the media extra.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
   cli: meltify read
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -28,29 +28,30 @@ Turn every input into markdown where each block starts with a citation, then wor
 8. Output lands in `meltify-out/read/`: one `.md` per item, plus `index.jsonl`. A rerun into the same folder removes the previous markdown of items this run didn't name at all. An item that failed this run keeps its previous markdown, so check its row for an `error` before you quote that file.
 
 ## Look closer
+- A picture's block starts with a link like `![picture](attachments/memo.docx/pictures/1a2b3c4d5e6f.webp)`, relative to the markdown file. Open it when OCR text can't carry the meaning, like a chart, diagram, photo or layout, and still quote numbers from the cited text. It's scaled to fit 1568 px, so read small print from the text, not the picture
 
 The same command takes a closer look when one image, PDF or video matters. Each option below adds rows or files to the same output.
 
 - One image or scanned page:
-  - `--engines vision,gemini` replaces the default engines, here adding a paid one. Name one only when the user agrees, and use `paddle` instead of `vision` on Linux. See `references/engines.md`
+  - `--engines vision,gemini` replaces the default engines, here adding a paid one. Name one only when the user agrees. On Linux, there's no `vision`, so use an endpoint the user serves. See `references/engines.md`
   - `--reading agent=FILE` compares your own reading as one more engine. Look at the image or PDF page yourself with Read, write what you see to FILE one line per line of text, and give exactly one image, or one PDF with `--pages N`
   - `--ocr-pages` OCRs PDF pages that have a text layer too. Without it only scanned pages and large pictures are OCR'd, so add it to check a text layer against the page, or before `--reading` on such a page
   - `--equalize` for faint or low-contrast text, `--upscale 3` for a fixed resize, and `--compare tokens` to compare words as well as numbers
-  - A value counts as agreed only when two or more engines read it the same number of times and at least one of them is local
+  - A value counts as agreed only when every engine reads it the same number of times and at least one of them is local
 - PDFs:
   - `--hidden` checks PDFs, and lists every hidden span as a row of kind `hidden`, with its `text`, the `reasons` it's hidden and a cite such as `doc.pdf#p2@pt(72,95,140,103)`. Reasons are render mode 3, opacity, size, off page, layer, color matches background, and covered by a later fill
   - `--contrast` also saves each page rendered in stretched contrast, as rows of kind `contrast` with the picture's `path`, for text drawn inside images
   - `--pages 1,3-5` limits every PDF in the run to those pages
 - Recordings and videos:
-  - Each video gets rows of kind `frame` with a JPEG `path` under `attachments/` and a cite with its time. Its `reasons` say `scene` for a scene change or `interval` for a regular sample. Up to `--frames N` (20) are kept, spread over the video, and OCR'd. `--frames 0` skips frames
+  - Each video gets rows of kind `frame` with a WebP `path` under `attachments/`, the full frame under `--no-pictures`, and a cite with its time. Its `reasons` say `scene` for a scene change or `interval` for a regular sample. Up to `--frames N` (20) are kept, spread over the video, and OCR'd. `--frames 0` skips frames
   - Only scene changes are taken by default, so a slow change can slip by. `--fps 2` adds interval frames, and since they count toward `--frames` too, raise it with them. A warning says when the cap dropped frames
   - `--start 600 --end 780` narrows to a window, in seconds. Find it first from the transcript
-  - `--scene 0.2` catches subtler scene changes, `--keep-duplicates` keeps near-identical frames, marked with the time they repeat, and `--asr mlx` names the speech engine
+  - `--scene 0.2` catches subtler scene changes, `--keep-duplicates` keeps near-identical frames, marked with the time they repeat, and `--asr NAME` names the speech engine
   - `--subs-only` takes the transcript from subtitles alone, from a URL or from a `.vtt` or `.srt` file beside the video, and skips speech recognition and frames
 
 ## Read the output
 
-Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow it down to a line or cell yourself:
+Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow it down to a line or cell yourself. `references/output.md` lists every row key, row kind, cite format and exit code:
 
 - Text files melt in blocks of 200 lines, headed `## notes.txt:1`, `## notes.txt:201` and so on
   - Each line starts with its number, like `201| `, so cite that line as `notes.txt:201`
@@ -69,7 +70,7 @@ Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow 
   - `https://example.com/guide#install:28`: line 28 under the heading with that anchor
   - `call.m4a@00:01:23.4-00:01:27.0`: a transcript span
 - OCR lines start with their position, such as `@px(120,40,380,72)| 48,250` or `@pt(72,95,140,103)| ...`, so a value can be cited down to its box
-- A block whose number two engines read differently ends with `> disputed 765: vision 0, paddle 1`. One with only one engine ends with `> unchecked: one engine`
+- A block whose number two engines read differently ends with `> disputed 765: vision 0, gemini 1`. One with only one engine ends with `> unchecked: one engine`
 - Attachments, archive members, files attached to a PDF and downloaded files are saved and melted as items of their own
 - A row of kind `rendered` was drawn by LibreOffice or Quick Look and then OCR'd, so its text is only as good as the OCR
   - It's a binary file no converter reads, or an Office binary, HWP or iWork file its parser gave up on
@@ -81,11 +82,11 @@ Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow 
 The `needs` column lists follow-up work:
 
 - Unread pictures, pages or recordings:
-  - `ocr pages 2,5`, `ocr`, `ocr 3 images` or `media`: no local engine was available, or `--shallow` skipped it. Use the meltify-doctor skill, or rerun without `--shallow`
+  - `ocr pages 2,5`, `ocr`, `ocr 3 images` or `media`: no engine was available, an endpoint stopped answering mid-run, or `--shallow` skipped it. Use the meltify-doctor skill, or rerun without `--shallow`
   - `ocr (budget)` or `media (budget)`: the time budget ran out. Rerun with a higher `--budget`
   - `ocr (failed)`: the engines couldn't read it. Look at the image yourself, then rerun with `--reading` or another engine
   - `... not read (not drawn under --shallow)`: a picture or slide only OCR could read. Rerun without `--shallow`
-  - `no text found`: the engines read every picture or recording of the item and found nothing. It may really be blank. If you expected text, check `--lang`, or look at the image yourself
+  - `no text found`: the engines read every picture or recording of the item and found nothing. It may really be blank. If you expected text, check `--lang`, or open the picture its block links
 - `hidden N spans`: a PDF holds text a reader can't see. Rerun with `--hidden` before quoting that page
 - `hidden N texts`: an SVG holds text a viewer can't see, marked `[hidden]` in its markdown. Keep it apart from visible text
 - `no subtitles`: `--subs-only` found no captions for that recording. Rerun without it to transcribe the speech
@@ -117,7 +118,7 @@ The `needs` column lists follow-up work:
 - On macOS 27, Apple Vision applies only the first language. Pass `--lang` with the language of the text, like `--lang en`, not the language of the task.
 - Consecutive frames with a near-identical layout and brightness are skipped. A small change, like one digit of a counter, can get skipped along with them. Add `--keep-duplicates` when you're counting or comparing small details.
 - The speech engine detects the spoken language per file, since `asr.lang` is `auto` by default. If a transcript comes out in the wrong language, set `asr.lang` in `meltify.toml`, or `MELTIFY_ASR_LANG`, to the language spoken.
-- Linux has no Apple Vision, so with PaddleOCR alone every reading ends with `unchecked`.
+- Linux has no Apple Vision, so a value read only by LLM engines or endpoints ends with `unchecked` or `disputed`, never agreed.
 - With `--shallow`, or when the budget runs out, an image or a scanned page melts to little or no text. Missing text there means unread, not empty. `--shallow` also skips the rendering fallback, so a file only it could read stays `unsupported format`.
 - A file that stays encrypted gets no markdown at all, only its row with the `needs` line.
 - PowerPoint 95 and fallback formats need LibreOffice or, on macOS, Quick Look, and `--render` needs the render extra. Without them the row says so in `needs` or `error`.

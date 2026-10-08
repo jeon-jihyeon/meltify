@@ -76,6 +76,27 @@ def test_unknown_env_keys_are_ignored(tmp_path, home):
     assert "nope" not in s["ocr"]
 
 
+def test_endpoint_tables_come_from_files_not_env(tmp_path, home):
+    _write(
+        tmp_path / "meltify.toml",
+        '[ocr.endpoints.vl]\nbase_url = "http://127.0.0.1:8111/v1"\nmodel = "ocr-vl"\n',
+    )
+    s = config.load(cwd=tmp_path, env=home)
+    assert s["ocr"]["endpoints"]["vl"]["model"] == "ocr-vl"
+    assert not s["_warnings"]
+    with pytest.raises(config.ConfigError, match="config file"):
+        config.load(cwd=tmp_path, env={**home, "MELTIFY_OCR_ENDPOINTS": "vl"})
+
+
+def test_a_bad_endpoint_table_fails_read_before_any_output(tmp_path, home, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes.txt").write_text("hello\n")
+    _write(tmp_path / "meltify.toml", '[ocr.endpoints.vl]\nbase_url = "http://127.0.0.1/v1"\n')
+    assert cli.main(["read", "notes.txt", "--json"]) == 2
+    assert "needs base_url and model" in capsys.readouterr().out
+    assert not (tmp_path / "meltify-out").exists()
+
+
 def test_explicit_config_path_and_errors(tmp_path, home):
     p = _write(tmp_path / "custom.toml", "[media]\nscene = 0.5\n")
     assert config.load(cwd=tmp_path, env=home, project=p)["media"]["scene"] == 0.5

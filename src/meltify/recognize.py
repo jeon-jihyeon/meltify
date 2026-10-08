@@ -1,7 +1,7 @@
 """OCR and speech for the pixels and sound `read` finds, with results cited in place
 
-A few workers read jobs side by side, while Paddle and MLX, which hold one large model
-each, still read one job at a time. Identical content is read once, and every engine
+A few workers read jobs side by side, while a local speech engine, which runs one large
+model, still reads one job at a time. Identical content is read once, and every engine
 result is cached by content hash under ${XDG_CACHE_HOME:-~/.cache}/meltify, so a rerun
 only pays for what changed
 """
@@ -35,7 +35,7 @@ from meltify.evidence import Src, clock, coordinate, finding, span
 from meltify.ffmpeg import Window
 from meltify.files import safe_name
 from meltify.needs import ITEM_NOTE
-from meltify.safe import MissingTool, attempt
+from meltify.safe import MissingTool, Unreachable, attempt
 
 # MissingTool names raised when no engine was found at all, which the run already warned
 # about once
@@ -196,6 +196,22 @@ class Cache:
             pass
 
 
+def _identity(engine: Any) -> str:
+    """The engine's name in cache keys, which changes with any setting that changes its output
+
+    An HTTP engine's output depends on the model and the server behind it, so swapping either
+    never reuses another's readings, which could otherwise pass one model's guess off as another's
+    """
+    from meltify.engines.asr import Api
+    from meltify.engines.ocr import Remote
+
+    if not isinstance(engine, Remote | Api):
+        return engine.name
+    prompt = engine.endpoint.prompt if engine.endpoint is not None else ""
+    parts = "\n".join([engine.model, engine.base_url, prompt])
+    return f"{engine.name}-{hashlib.sha256(parts.encode()).hexdigest()[:12]}"
+
+
 def _box(b: Box | None, k: float) -> Box | None:
     return None if b is None else (b[0] * k, b[1] * k, b[2] * k, b[3] * k)
 
@@ -242,8 +258,10 @@ class Recognizer:
         # Unique contents this run, and how many came straight from the cache
         self.seen = 0
         self.cached = 0
-        # One lock per engine that can't take two jobs at once
-        self._locks: dict[str, threading.Lock] = {}
+        # whisper.cpp runs one large model per call, so two at once only fight over the CPU
+        self._speech_lock = threading.Lock()
+        # Engines whose server stopped answering, skipped for the rest of the run
+        self._down: set[str] = set()
         # Warnings a worker raises wait here, so they come out in job order
         self._held = threading.local()
 
@@ -257,13 +275,10 @@ class Recognizer:
             self._warn(message)
 
     def _one_at_a_time(self, engine: Any) -> Any:
-        """The engine's lock, or a no-op for engines safe across threads"""
-        from meltify.engines.ocr import REMOTE, SHARED
+        """The speech lock for a local engine, or a no-op for a server, which batches requests"""
+        from meltify.engines.asr import Api
 
-        # Speech models keep one stateful model per instance, so they always take the lock
-        if engine.name in SHARED or getattr(engine, "kind", None) == REMOTE:
-            return contextlib.nullcontext()
-        return self._locks.setdefault(engine.name, threading.Lock())
+        return contextlib.nullcontext() if isinstance(engine, Api) else self._speech_lock
 
     # Engines
 
@@ -283,6 +298,10 @@ class Recognizer:
             # in the order named
             rank = {n: i for i, n in enumerate(engines.LOCAL_ENGINES)}
             self._ocr = sorted(chosen, key=lambda e: rank.get(e.name, len(rank)))
+            if self.opts.engines == "auto":
+                for name, ep in engines.endpoints(self.settings).items():
+                    if (why := ep.missing()) is not None:
+                        self.warn(f"ocr endpoint {name} is skipped: {why}")
             if not chosen:
                 self.warn(
                     "no local OCR engine, so images stay listed as needs."
@@ -293,8 +312,14 @@ class Recognizer:
     def check_named(self, ocr: bool, asr: bool) -> None:
         """Raise MissingTool now for an engine the command line named, before anything is written
 
-        Engines named only in a config file stay lazy, so a run with nothing to OCR still works
+        Engines named only in a config file stay lazy, so a run with nothing to OCR still works.
+        Endpoint tables are checked either way, so a typo fails before any output
         """
+        from meltify.engines import asr as speech
+        from meltify.engines import ocr as engines
+
+        engines.endpoints(self.settings)
+        speech.endpoints(self.settings)
         if ocr and self.opts.engines != "auto":
             self._ocr_named = True
             self.ocr_engines()
@@ -302,16 +327,24 @@ class Recognizer:
             self.asr_engine()
 
     def asr_engine(self) -> Any:
-        if not self._asr_ready:
-            from meltify.engines import asr
+        """The speech engine, picked again when the one in use stopped answering"""
+        if self._asr_ready and (self._asr is None or self._asr.name not in self._down):
+            return self._asr
+        from meltify.engines import asr
 
-            self._asr_ready = True
-            try:
-                self._asr = asr.select(self.opts.asr, self.settings)
-            except MissingTool as e:
-                if self.opts.asr != "auto":
-                    raise
-                self.warn(f"no speech engine, so audio stays listed as needs: {e.hint}")
+        first = not self._asr_ready
+        self._asr_ready = True
+        self._asr = None
+        try:
+            self._asr = asr.select(self.opts.asr, self.settings, frozenset(self._down))
+        except MissingTool as e:
+            if first and self.opts.asr != "auto":
+                raise
+            self.warn(f"no speech engine, so audio stays listed as needs: {e.hint}")
+        if first and self.opts.asr == "auto":
+            for name, ep in asr.endpoints(self.settings).items():
+                if (why := ep.missing()) is not None:
+                    self.warn(f"asr endpoint {name} is skipped: {why}")
         return self._asr
 
     # Content keys
@@ -368,11 +401,6 @@ class Recognizer:
             self.seen += len(groups)
             self.cached += len(groups) - len(pending)
             start = time.monotonic()
-            # Locks exist before any worker asks, so two never make their own
-            for e in self._ocr or []:
-                self._one_at_a_time(e)
-            if self._asr is not None:
-                self._one_at_a_time(self._asr)
 
             def read(group: tuple[str, str, bool], members: list[int]) -> list[str]:
                 self._held.warnings = []
@@ -477,7 +505,7 @@ class Recognizer:
         from meltify import imaging
         from meltify.engines import ocr as engines
 
-        chosen = self.ocr_engines()
+        chosen = [e for e in self.ocr_engines() if e.name not in self._down]
         if not chosen and not given:
             raise MissingTool("ocr engine", f"{engines.INSTALL_HINT}, or --engines NAME")
         lang, prep = self.opts.lang, self._prep(kind == "page")
@@ -485,7 +513,7 @@ class Recognizer:
         readings: dict[str, EngineReading] = {}
         missing = []
         for e in chosen:
-            hit = self.cache.get("ocr", sha, e.name, lang, prep)
+            hit = self.cache.get("ocr", sha, _identity(e), lang, prep)
             if hit is None:
                 missing.append(e)
                 continue
@@ -509,11 +537,14 @@ class Recognizer:
             work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
             prep_path = imaging.save(prepared, work / "prepared.png")
             for e in missing:
-                if isinstance(e, engines.Remote):
-                    got = attempt(engines.read_tiles, e, prepared, self.opts.tile_max, work)
-                else:
-                    with self._one_at_a_time(e):
+                try:
+                    if isinstance(e, engines.Remote):
+                        got = attempt(engines.read_tiles, e, prepared, self.opts.tile_max, work)
+                    else:
                         got = attempt(e.recognize, prep_path, prepared.size)
+                except Unreachable as err:
+                    self._drop(e.name, err)
+                    continue
                 if not got.ok:
                     self.warn(f"{e.name} failed on {where}: {got.error}")
                     continue
@@ -527,7 +558,7 @@ class Recognizer:
                     },
                     "ocr",
                     sha,
-                    e.name,
+                    _identity(e),
                     lang,
                     prep,
                 )
@@ -535,6 +566,11 @@ class Recognizer:
         found = [readings[e.name] for e in chosen if e.name in readings]
         found += [EngineReading(r.name, r.kind, r.recognize(Path(), (0, 0))) for r in given]
         return Picture(size or (0, 0), found)
+
+    def _drop(self, name: str, err: Unreachable) -> None:
+        # A server that's down fails every call after a timeout, so ask it once per run
+        self._down.add(name)
+        self.warn(f"{name} is skipped for the rest of this run: {err}")
 
     # Sound
 
@@ -552,11 +588,12 @@ class Recognizer:
         self, sha: str, path: Path | None, where: str, compute: bool
     ) -> list[Segment] | None:
         from meltify import ffmpeg
+        from meltify.engines import asr
 
         engine = self.asr_engine()
         if engine is None:
-            raise MissingTool("speech engine", "meltify doctor --install asr-mlx")
-        key = ("asr", sha, engine.name, self.opts.asr_lang, self._asr_prep(engine))
+            raise MissingTool("speech engine", asr.INSTALL_HINT)
+        key = ("asr", sha, _identity(engine), self.opts.asr_lang, self._asr_prep(engine))
         if (hit := self.cache.get(*key)) is not None:
             return [Segment(s, e, t) for s, e, t in hit["segments"]]
         if not compute:
@@ -567,8 +604,13 @@ class Recognizer:
             work = Path(tempfile.mkdtemp(prefix=f"{sha[:12]}-", dir=self.tmp))
             window = self.opts.window
             wav = ffmpeg.audio(path, work / "audio.wav", window)
-            with self._one_at_a_time(engine):
-                got = attempt(engine.transcribe, wav, self.opts.asr_lang)
+            try:
+                with self._one_at_a_time(engine):
+                    got = attempt(engine.transcribe, wav, self.opts.asr_lang)
+            except Unreachable as err:
+                # The next engine in line takes this recording, or it stays a need
+                self._drop(engine.name, err)
+                return self.speech(sha, path, where, compute)
             if not got.ok:
                 self.warn(f"{engine.name} failed on {where}: {got.error}")
                 return []
@@ -588,8 +630,15 @@ class Recognizer:
         if listen and self.asr_engine() is None:
             # Scenes still help without a transcript
             speech = None
-        elif listen and (speech := self.speech(sha, path, where, compute)) is None:
-            return None
+        elif listen:
+            try:
+                if (speech := self.speech(sha, path, where, compute)) is None:
+                    return None
+            except MissingTool as e:
+                # The speech server went down mid-run, and scenes still help
+                if e.name not in NO_ENGINE:
+                    raise
+                speech = None
         look = self.opts.frames > 0 and bool(self.ocr_engines())
         o = self.opts
         key = (

@@ -60,7 +60,7 @@ def compare(readings: list[EngineReading], mode: str = "numbers") -> list[Verdic
 
 
 def tally(v: Verdict) -> str:
-    """How often each engine read the value, like `vision 1, paddle 0`"""
+    """How often each engine read the value, like `vision 1, gemini 0`"""
     return ", ".join(f"{name} {n}" for name, n in v.counts.items())
 
 

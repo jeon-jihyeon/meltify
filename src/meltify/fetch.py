@@ -103,21 +103,24 @@ def _public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_global
 
 
-def _resolve(host: str, port: int, allow_private: bool) -> list[str]:
-    """Addresses for the host, refusing the whole host if any of them isn't public"""
+def _addresses(host: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as e:
+    except (socket.gaierror, UnicodeError) as e:
         raise ValueError(f"can't resolve {host}: {e}") from None
-    ips = []
-    for info in infos:
-        ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
-        if not allow_private and not _public(ip):
-            raise ValueError(f"blocked {host}: {ip} isn't a public address (try --allow-private)")
-        ips.append(str(ip))
+    ips = [ipaddress.ip_address(str(info[4][0]).split("%")[0]) for info in infos]
     if not ips:
         raise ValueError(f"can't resolve {host}")
     return ips
+
+
+def _resolve(host: str, port: int, allow_private: bool) -> list[str]:
+    """Addresses for the host, refusing the whole host if any of them isn't public"""
+    ips = _addresses(host, port)
+    for ip in ips:
+        if not allow_private and not _public(ip):
+            raise ValueError(f"blocked {host}: {ip} isn't a public address (try --allow-private)")
+    return [str(ip) for ip in ips]
 
 
 def _check(url: httpx.URL, allow_private: bool) -> None:
@@ -126,6 +129,17 @@ def _check(url: httpx.URL, allow_private: bool) -> None:
     if not url.host:
         raise ValueError(f"no host in {url}")
     _resolve(url.host, url.port or (443 if url.scheme == "https" else 80), allow_private)
+
+
+def private_only(url: str) -> bool:
+    """Whether the URL's host resolves, and only to addresses that aren't public"""
+    try:
+        parsed = httpx.URL(url)
+        if not parsed.host:
+            return False
+        return not any(map(_public, _addresses(parsed.host, parsed.port or 80)))
+    except (httpx.InvalidURL, ValueError):
+        return False
 
 
 def check_url(url: str, allow_private: bool) -> None:

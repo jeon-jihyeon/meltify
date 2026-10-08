@@ -24,7 +24,7 @@ def test_doctor_reports_engines_and_keys_without_values(monkeypatch, capsys, tmp
     assert checks["key GEMINI_API_KEY"]["ok"] is True
     assert "secret-value" not in json.dumps(out)
     assert checks["ocr gemini"]["ok"] is True
-    assert {"asr mlx", "asr whispercpp", "asr api", "ocr vision", "ocr paddle"} <= set(checks)
+    assert {"asr whispercpp", "asr api", "ocr vision"} <= set(checks)
 
 
 def test_missing_base_module_exits_three(monkeypatch, tmp_path):
@@ -44,7 +44,45 @@ def test_engines_list_every_ocr_and_asr_engine():
 
     checks = {r["check"] for r in doctor.engines(config.defaults())}
     assert {f"ocr {name}" for name in ocr.ENGINES} <= checks
-    assert {"asr mlx", "asr whispercpp", "asr api"} <= checks
+    assert {"asr whispercpp", "asr api"} <= checks
+
+
+def test_a_bad_endpoint_table_is_a_row_not_a_crash():
+    from meltify import config
+
+    settings = config.defaults()
+    settings["asr"]["endpoints"] = {"whisper": {"base_url": "http://127.0.0.1:9000/v1"}}
+    assert doctor.engines(settings) == [
+        doctor._row(
+            "config endpoints",
+            False,
+            "invalid",
+            "read images and recordings",
+            "asr.endpoints.whisper needs base_url and model",
+        )
+    ]
+
+
+def test_an_endpoint_is_ready_only_when_its_server_answers(monkeypatch):
+    import httpx
+
+    from meltify import config
+
+    settings = config.defaults()
+    settings["ocr"]["endpoints"] = {"vl": {"base_url": "http://127.0.0.1:9/v1", "model": "m"}}
+
+    def down(url, **kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "get", down)
+    row = next(r for r in doctor.engines(settings) if r["check"] == "ocr vl")
+    assert not row["ok"] and "not answering" in row["hint"]
+
+    def up(url, **kwargs):
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr(httpx, "get", up)
+    assert next(r for r in doctor.engines(settings) if r["check"] == "ocr vl")["ok"]
 
 
 def test_data_dir_matches_the_launcher(tmp_path):

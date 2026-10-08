@@ -8,7 +8,7 @@ uv run pytest -m "not llm and not heavy"
 uv run ruff check . && uv run ruff format --check .
 ```
 
-`--locked` installs exactly what `uv.lock` pins, the way CI does. Tests marked `llm` call a paid API and `heavy` ones download large models, so the `-m` filter leaves both out. Media tests skip themselves when `ffmpeg` isn't on `PATH`.
+`--locked` installs exactly what `uv.lock` pins, the way CI does. Tests marked `llm` call a paid API, so the `-m` filter leaves them out. Media tests skip themselves when `ffmpeg` isn't on `PATH`.
 
 Run the full suite before you send a change, not just the tests next to your edit. Converters share limits, picture handling and run state, so a fix in one often shows up in another.
 

@@ -12,7 +12,7 @@ openai_key_env = "OPENAI_API_KEY"
 openai_base_url = "https://api.openai.com/v1"
 
 [ocr]
-# auto picks every installed local engine
+# auto picks every installed local engine and every endpoint below
 # Paid LLM engines run only when you name them here or on the command line
 engines = "auto"
 # Resize factor for pictures before OCR, 0 to lift each small picture toward a readable size
@@ -21,15 +21,24 @@ sharpen = true
 tile_max = 2576
 dpi = 300
 
+# OCR models you serve yourself behind an OpenAI-compatible endpoint, one table each, like
+# [ocr.endpoints.paddle-vl] with base_url and model, plus key_env, timeout or prompt if needed.
+# Each is an engine named after its table that auto runs. It counts as an LLM in agreement,
+# since it can guess. Only loopback and private addresses qualify, even when named, so a
+# hosted API runs only as the claude, gemini or openai engine
+[ocr.endpoints]
+
 [asr]
-# auto tries mlx, then whispercpp, and never the paid API unless you name it
+# auto tries asr.endpoints, then whispercpp, and never the paid API unless you name it
 engine = "auto"
-model = "mlx-community/whisper-large-v3-turbo"
 whispercpp_model = ""
 api_model = "whisper-1"
 # Spoken language for every speech engine. auto lets Whisper detect it per file, since the
 # top-level lang is the OCR text language and forcing it makes other speech come out translated
 lang = "auto"
+
+# Speech models you serve yourself, the same way as ocr.endpoints minus prompt
+[asr.endpoints]
 
 [media]
 max_height = 1080
@@ -54,6 +63,11 @@ max_bytes = 20000000
 fallback = true
 # Parquet rows melted per file, 0 for all. The rest stays counted as a need
 parquet_rows = 200
+# Each picture is also saved beside the markdown as a small WebP, so an agent can look at a
+# chart or photo OCR text can't describe. Longest side in pixels, 0 to turn it off
+picture_side = 1568
+# WebP quality from 1 to 100. Exact text comes from OCR, so the picture only needs the layout
+picture_quality = 50
 
 [render]
 # macOS only. Quick Look previews draw what LibreOffice can't or isn't installed for, like

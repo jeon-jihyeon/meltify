@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from meltify import passwords
+from meltify import config, passwords
 from meltify.cli import main
 from meltify.converters import blips, doc, metafile, pick, ppt, quicklook, render, unlock
 from meltify.converters.blips import PICTURE_ENTRY, SHAPE_OPTIONS
@@ -536,7 +536,7 @@ def test_rendered_ppt_pages_key_on_the_ppt_not_the_render(tmp_path, monkeypatch)
     runs = [ppt._rendered(path, Src("old.ppt")) for _ in range(2)]
     [first], [second] = (out.jobs for out in runs)
     assert first.path.read_bytes() != second.path.read_bytes()
-    reader = Recognizer(Options(), {}, print)
+    reader = Recognizer(Options(), config.defaults(), print)
     # The OCR cache hits on the second run, since both renders drew the same ppt
     assert reader.key(first) == reader.key(second)
 

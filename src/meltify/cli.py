@@ -18,14 +18,6 @@ from meltify.safe import MissingTool
 # Each module exposes NAME, HELP, COLUMNS, add_arguments and run.
 # Heavy imports live inside run, so --help and --version start fast
 COMMANDS: list[str] = ["read", "doctor"]
-# Commands folded into read in 0.3.0, with the flags that keep their meaning. They're removed
-# in 0.4.0
-DEPRECATED: dict[str, list[str]] = {
-    "ocr": ["--ocr-pages"],
-    "hidden": ["--hidden"],
-    # media took interval frames at 1 fps by default, which read leaves off
-    "media": ["--fps", "1"],
-}
 
 USAGE_ERROR = 2
 
@@ -97,23 +89,10 @@ def _failure(e: Exception) -> tuple[str, str, str | None]:
     return FAILED, error_note(e, COMMAND_NOTE), "set MELTIFY_DEBUG=1 to see the traceback"
 
 
-def _undeprecated(argv: list[str]) -> tuple[list[str], str | None]:
-    """The read command line an old command stands for, and the warning that says so"""
-    if not argv or argv[0] not in DEPRECATED:
-        return argv, None
-    old, extra = argv[0], DEPRECATED[argv[0]]
-    # media --no-frames meant no frames at all, which read spells --frames 0
-    rest = [a for x in argv[1:] for a in (["--frames", "0"] if x == "--no-frames" else [x])]
-    new = ["read", *extra, *rest]
-    hint = " ".join(["meltify read", *extra])
-    return new, f"meltify {old} is deprecated and will be removed in 0.4.0, use {hint} instead"
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     modules = _modules()
     parser = build_parser(modules)
-    argv, deprecated = _undeprecated(list(sys.argv[1:] if argv is None else argv))
-    args = parser.parse_args(argv)
+    args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     if not getattr(args, "_module", None):
         parser.print_help(sys.stderr)
         return USAGE_ERROR
@@ -135,7 +114,5 @@ def main(argv: Sequence[str] | None = None) -> int:
         env = Envelope(command=module.NAME, version=__version__)
         env.error(*_failure(e))
     env.warnings[:0] = settings["_warnings"]
-    if deprecated:
-        env.warnings.insert(0, deprecated)
     emit(env, as_json=args.json, columns=env.columns or module.COLUMNS, limit=args.limit)
     return env.exit_code

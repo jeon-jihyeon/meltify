@@ -12,7 +12,7 @@ gemini_model = "gemini-3-pro"
 openai_model = "gpt-5.5"
 
 [ocr]
-# auto uses installed local engines only. List paid ones here to add them
+# auto uses installed local engines and every endpoint below. List paid ones here to add them
 engines = "auto"
 # Resize factor before OCR, 0 to size each picture on its own
 upscale = 0
@@ -20,9 +20,20 @@ dpi = 300
 
 [asr]
 engine = "auto"
-model = "mlx-community/whisper-large-v3-turbo"
+# Path to a ggml model file. whisper.cpp stays unavailable until it's set
+# whispercpp_model = "~/models/ggml-large-v3-turbo.bin"
 # Spoken language, separate from lang above. auto lets Whisper detect it per recording
 lang = "auto"
+
+# A model you serve yourself is an engine named after its table that auto runs, with no key.
+# key_env, timeout and, for OCR, prompt are optional
+# [ocr.endpoints.paddle-vl]
+# base_url = "http://127.0.0.1:8111/v1"
+# model = "PaddlePaddle/PaddleOCR-VL-1.6"
+
+# [asr.endpoints.whisper]
+# base_url = "http://127.0.0.1:9000/v1"
+# model = "whisper-large-v3-turbo"
 
 # [read]
 # Files converted at once. Above 1, PDFs convert in worker processes
@@ -37,6 +48,9 @@ lang = "auto"
 # fallback = true
 # Parquet rows melted per file, 0 for all
 # parquet_rows = 200
+# Longest side of the WebP saved per picture, 0 to save none
+# picture_side = 1568
+# picture_quality = 50
 
 # [render]
 # macOS only. false keeps Quick Look and Spotlight out of every render

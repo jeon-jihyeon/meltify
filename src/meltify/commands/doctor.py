@@ -20,7 +20,6 @@ HELP = "check the engines, binaries and API keys that read needs"
 COLUMNS = ["check", "ok", "detail", "used_by", "hint"]
 
 IS_MAC = sys.platform == "darwin"
-IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
 
 # Each entry: module, its users, install hint, and whether the base install needs it
 MODULES = [
@@ -51,12 +50,9 @@ MODULES = [
     ("pyarrow", "read parquet", "meltify doctor --install parquet", False),
     ("playwright", "read --render", "meltify doctor --install render", False),
     ("yt_dlp", "read video urls", "meltify doctor --install media", False),
-    ("paddleocr", "read ocr paddle", "meltify doctor --install ocr-paddle", False),
 ]
 if IS_MAC:
     MODULES.append(("ocrmac", "read ocr vision", "pip install meltify", True))
-if IS_APPLE_SILICON:
-    MODULES.append(("mlx_whisper", "read asr", "meltify doctor --install asr-mlx", False))
 
 BINARIES = [
     ("ffmpeg", "read recordings", "brew install ffmpeg or apt install ffmpeg"),
@@ -84,8 +80,6 @@ EXTRAS = [
     "crypto",
     "render",
     "media",
-    "asr-mlx",
-    "ocr-paddle",
     "all",
     # Not a Python extra: a portable LibreOffice downloaded into the tools dir
     "libreoffice",
@@ -163,7 +157,13 @@ def checks(settings: dict[str, Any], quick: bool, env: dict[str, str]) -> list[d
         probe = out if out.exists() else Path.cwd()
         free = shutil.disk_usage(probe).free / 2**30
         rows.append(
-            _row("disk free", free > 5, f"{free:.0f} GB at {probe}", "model downloads", "free 5 GB")
+            _row(
+                "disk free",
+                free > 5,
+                f"{free:.0f} GB at {probe}",
+                "extras and LibreOffice downloads",
+                "free 5 GB",
+            )
         )
 
     rows.append(_row("data dir", True, str(paths.data_dir(env))))
@@ -244,27 +244,28 @@ def system_parts() -> list[dict[str, Any]]:
 
 def engines(settings: dict[str, Any]) -> list[dict[str, Any]]:
     from meltify.engines import asr, ocr
+    from meltify.llm import answers
 
+    try:
+        found = [
+            (f"ocr {n}", ocr.build(n, settings)) for n in (*ocr.ENGINES, *ocr.endpoints(settings))
+        ]
+        found += [(f"asr {e.name}", e) for e in asr.engines(settings).values()]
+    except ValueError as e:
+        # A bad endpoint table is the thing to report, not a reason to skip every other check
+        return [_row("config endpoints", False, "invalid", "read images and recordings", str(e))]
     rows = []
-    for name in ocr.ENGINES:
-        why = ocr.build(name, settings).missing()
-        rows.append(
-            _row(
-                f"ocr {name}",
-                why is None,
-                "ready" if why is None else "unavailable",
-                "read images",
-                why or "",
-            )
-        )
-    for engine in asr.engines(settings).values():
+    for check, engine in found:
         why = engine.missing()
+        # An address check alone would call a stopped server ready, and asking costs nothing
+        if why is None and (ep := getattr(engine, "endpoint", None)) is not None:
+            why = answers(ep.base_url, ep.api_key)
         rows.append(
             _row(
-                f"asr {engine.name}",
+                check,
                 why is None,
                 "ready" if why is None else "unavailable",
-                "read recordings",
+                "read images" if check.startswith("ocr") else "read recordings",
                 why or "",
             )
         )

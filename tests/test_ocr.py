@@ -4,14 +4,16 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
 from PIL import Image, ImageDraw
 
-from meltify import imaging
+from meltify import config, imaging
 from meltify.cli import main
 from meltify.engines import ocr as engines
 from meltify.engines.consensus import EngineReading, compare
 from meltify.engines.ocr import LOCAL, REMOTE, TextBox
+from meltify.safe import Unreachable
 
 
 @dataclass
@@ -249,8 +251,94 @@ def test_no_engine_leaves_the_picture_listed(tmp_path, monkeypatch, capsys):
 
 
 def test_paid_engines_are_never_auto():
-    names = [e.name for e in engines.select("auto", {"lang": "ko", "llm": {}})]
+    names = [e.name for e in engines.select("auto", config.defaults())]
     assert not {"claude", "gemini", "openai"} & set(names)
+
+
+def _served(base_url: str, **table) -> dict:
+    settings = config.defaults()
+    settings["ocr"]["endpoints"] = {"vl": {"base_url": base_url, "model": "ocr-vl", **table}}
+    return settings
+
+
+def test_auto_runs_an_endpoint_you_serve_but_counts_it_as_an_llm(monkeypatch):
+    settings = _served("http://127.0.0.1:8111/v1")
+    vl = next(e for e in engines.select("auto", settings) if e.name == "vl")
+    assert vl.missing() is None
+    assert "vl" in engines.names(settings)
+    # A served VLM can guess like any LLM, so it can't make a value agreed with another LLM
+    readings = [
+        EngineReading("vl", vl.kind, [TextBox("합계 9,999")]),
+        EngineReading("claude", REMOTE, [TextBox("합계 9,999")]),
+    ]
+    assert not compare(readings)[0].agreed
+
+    settings["ocr"]["endpoints"]["vl"]["key_env"] = "VL_KEY"
+    monkeypatch.delenv("VL_KEY", raising=False)
+    assert engines.build("vl", settings).missing() == "export VL_KEY=..."
+
+
+def test_a_hosted_api_never_counts_as_an_endpoint():
+    assert "loopback or private" in engines.build("vl", _served("https://8.8.8.8/v1")).missing()
+    assert "vl" not in [e.name for e in engines.select("auto", _served("https://8.8.8.8/v1"))]
+
+
+@pytest.mark.parametrize(
+    ("table", "message"),
+    [
+        ({"base_url": "http://127.0.0.1/v1"}, "needs base_url and model"),
+        ({"base_url": "http://127.0.0.1/v1", "model": "m", "url": "x"}, "unknown field url"),
+        ({"base_url": "http://127.0.0.1/v1", "model": "m", "timeout": "5"}, "wrong type"),
+    ],
+)
+def test_endpoint_tables_fail_loudly(table, message):
+    settings = config.defaults()
+    settings["ocr"]["endpoints"] = {"vl": table}
+    with pytest.raises(ValueError, match=message):
+        engines.select("auto", settings)
+    settings["ocr"]["endpoints"] = {"vision": {"base_url": "http://127.0.0.1/v1", "model": "m"}}
+    with pytest.raises(ValueError, match="built-in engine"):
+        engines.select("auto", settings)
+
+
+def test_an_endpoint_sends_its_prompt_and_timeout_and_no_key_by_default(monkeypatch, tmp_path):
+    seen = {}
+
+    def post(url, json, headers, timeout):
+        seen.update(
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            prompt=json["messages"][0]["content"][0]["text"],
+        )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "합계 1,250원"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    vl = engines.build("vl", _served("http://localhost:8111/v1", timeout=300, prompt="OCR:"))
+    image = tmp_path / "a.png"
+    image.write_bytes(b"png")
+    assert [b.text for b in vl.recognize(image, (1, 1))] == ["합계 1,250원"]
+    assert seen == {
+        "url": "http://localhost:8111/v1/chat/completions",
+        "headers": {},
+        "timeout": 300,
+        "prompt": "OCR:",
+    }
+
+
+def test_a_server_that_is_down_is_unreachable(monkeypatch, tmp_path):
+    def post(url, **kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", post)
+    image = tmp_path / "a.png"
+    image.write_bytes(b"png")
+    with pytest.raises(Unreachable, match="nothing answers"):
+        engines.build("vl", _served("http://127.0.0.1:9/v1")).recognize(image, (1, 1))
 
 
 @pytest.mark.macos
@@ -351,16 +439,6 @@ def test_one_engine_is_called_out_in_the_summary(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert "1 pictures read by one engine only" in out["summary"]
     assert any("nothing there was cross-checked" in w for w in out["warnings"])
-
-
-def test_the_old_ocr_command_ocrs_every_page(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 48,250"])])
-    pdf = str(_text_page_over_scan(tmp_path / "layer.pdf"))
-    assert main(["ocr", pdf, "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["warnings"][0].endswith("use meltify read --ocr-pages instead")
-    assert "TOTAL 48,250" in (tmp_path / "meltify-out/read/layer.pdf.md").read_text()
 
 
 def test_a_refused_reading_writes_no_markdown(tmp_path, monkeypatch, capsys):

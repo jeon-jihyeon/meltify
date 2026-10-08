@@ -2,6 +2,36 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
+## 0.4.0
+
+meltify connects to models instead of running them. Bring a model by serving it behind an OpenAI-compatible endpoint. This release removes what 0.3.0 marked for removal, so it's the next minor version.
+
+### Removed
+
+- The `paddle` OCR engine, the `mlx` speech engine, the `ocr-paddle` and `asr-mlx` extras and the `asr.model` setting, which loaded models into meltify itself. Serve the model behind an endpoint instead. `all` no longer includes `asr-mlx`
+- The `ocr`, `hidden` and `media` commands. Use `read --ocr-pages`, `read --hidden` and `read --fps 1`
+
+### Added
+
+- `[ocr.endpoints.NAME]` adds an OCR model you serve yourself behind an OpenAI-compatible endpoint, like PaddleOCR-VL behind mlx-vlm. Each is an engine named `NAME` that `auto` runs with no key. It counts as an LLM, so a value it reads is agreed only when a local engine reads it too
+- `[asr.endpoints.NAME]` does the same for speech, and `auto` tries them before whisper.cpp. When one stops answering mid-run, the next engine in line takes over
+- Each endpoint takes `base_url` and `model`, plus `key_env` and `timeout` when the server needs them, and OCR endpoints take a `prompt` too. A typo in a table fails the run before any output, and `doctor` reports it as a row
+- Only hosts that resolve to loopback or private addresses count, even when named, so a hosted API still runs only as the `claude`, `gemini` or `openai` engine. A run says when it skips one
+- `doctor` asks each endpoint for its model list, so a stopped server shows as unavailable
+- `read` saves each picture as a small WebP beside the markdown and links it from the picture's block, so an agent can look at a chart or photo OCR text can't describe. It fits 1568 px and 1.15 megapixels at quality 50, so a 7 MB phone photo comes out around 15 KB. `read.picture_side`, `read.picture_quality` and `--no-pictures` control it
+- Video frames under `attachments/` are saved the same way, as WebP instead of full-size copies, unless pictures are off
+- A rerun reuses pictures it already saved, and a run that fails keeps the ones its old markdown links
+
+### Fixed
+
+- OCR and speech results from HTTP engines are cached under the model and server, not just the engine name. Switching `openai_model` used to reuse the old model's readings
+- An engine whose server stops answering is skipped for the rest of the run with one warning, instead of failing and warning on every picture
+
+### Changed
+
+- Cached readings from the `claude`, `gemini`, `openai` and `api` engines are read again once, since their cache keys now include the model
+- README is shorter, and the details moved to the `meltify-read` skill's [output reference](plugin/skills/meltify-read/references/output.md)
+
 ## 0.3.0
 
 meltify is now about one job: melting files into cited text. `read` does all of it, and `doctor` checks what it needs.

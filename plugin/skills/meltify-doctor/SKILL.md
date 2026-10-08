@@ -4,7 +4,7 @@ description: Check which meltify engines, binaries and API keys are available on
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
   cli: meltify doctor
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read
 ---
@@ -23,7 +23,8 @@ Report what meltify can use on this machine and how to fix what's missing.
 - Each row is one check with `ok`, a `detail`, and the commands that need it in `used_by`
 - A failed row carries a `hint` with the install command
 - API keys are only reported as set or unset. Never print or ask for their values
-- `ocr *` and `asr *` rows say which engines are ready right now
+- `ocr *` and `asr *` rows say which engines are ready right now. Endpoint rows are ready only when the server answers `GET /models`
+- `config endpoints` fails when an `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]` table is invalid, and no other engine rows show until it's fixed
 - `bin soffice` covers PowerPoint 95, formula recalculation, EMF pictures meltify can't draw itself, uncached charts and binary formats like Works or Visio. A copy from `meltify doctor --install libreoffice` shows as `(downloaded)`
 - `render quicklook`, on macOS only, draws what LibreOffice can't or isn't installed for. It fails when `render.quicklook` is off
 - `bin 7zz` opens encrypted 7z and rar, `lib libarchive` plain 7z and rar, `bin wpd2text` WordPerfect, and `browser chrome` `read --render`
@@ -43,7 +44,7 @@ Report what meltify can use on this machine and how to fix what's missing.
    - `crypto` for encrypted Office, zip, HWP and iWork files
    - `iwork` for Numbers, `parquet` for Parquet, and `media` for video URLs
    - `render` for `read --render`. It also downloads Chromium when Chrome isn't installed
-   - `asr-mlx` or `ocr-paddle` for local engines
+   - None of the extras adds an OCR or speech engine. For one, suggest serving a model behind an OpenAI-compatible endpoint and adding it under `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]`
 
    Run through this skill's launcher, the extra goes into a venv in the data directory, which the launcher runs ahead of any other meltify on PATH. Run from a `pip` or `uv tool` install instead, `--install` installs nothing and prints the `pip install` or `uv tool install` command to run, exiting with 3. Pass that command on to the user.
 3. For `bin soffice`, `meltify doctor --install libreoffice` downloads a pinned portable LibreOffice of 208 to 309 MB, depending on the platform, on macOS and Linux. Ask first, since it's large. `lib libarchive` and `bin wpd2text` are system packages, not extras. Give the user the hint instead of installing them yourself.

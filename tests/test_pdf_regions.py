@@ -3,7 +3,7 @@ import zipfile
 
 import pytest
 
-from meltify import imaging
+from meltify import config, imaging
 from meltify.converters import pdf, raster
 from meltify.engines import ocr as engines
 from meltify.engines.ocr import LOCAL, TextBox
@@ -288,7 +288,7 @@ def test_each_frame_is_read_and_cached_on_its_own(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "select", lambda spec, s: [Shade()])
     path = _frames(tmp_path / "fax.tif", [20, 120], "TIFF")
     jobs = raster.convert(path, Src("fax.tif")).jobs
-    got = Recognizer(Options(sharpen=False), {}, print).run(jobs)
+    got = Recognizer(Options(sharpen=False), config.defaults(), print).run(jobs)
     first, second = (o.blocks[0].text.splitlines()[0] for o in got)
     assert first != second
     assert [o.blocks[0].src.cite() for o in got] == ["fax.tif#frame1", "fax.tif#frame2"]
@@ -321,7 +321,7 @@ def test_more_pillow_formats_open_for_ocr(tmp_path, suffix, save):
     else:
         Image.new("RGB", (120, 60), (200, 200, 200)).save(path, **save)
     (job,) = raster.convert(path, Src(path.name)).jobs
-    image = Recognizer(Options(), {}, print)._load(job)
+    image = Recognizer(Options(), config.defaults(), print)._load(job)
     assert image.mode == "RGB" and image.width > 0
 
 

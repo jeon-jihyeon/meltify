@@ -60,6 +60,12 @@ def add_arguments(p: argparse.ArgumentParser) -> dict[str, argparse.Action]:
     )
     add(
         p,
+        "--no-pictures",
+        action="store_true",
+        help="don't save a small WebP of each picture beside the markdown",
+    )
+    add(
+        p,
         "--budget",
         type=float,
         metavar="SEC",
@@ -76,7 +82,8 @@ def add_arguments(p: argparse.ArgumentParser) -> dict[str, argparse.Action]:
     add(
         p,
         "--engines",
-        help="OCR engines like vision,paddle or gemini (default: auto, local engines only)",
+        help="OCR engines like vision,gemini or an endpoint you named (default: auto, local "
+        "engines and endpoints only)",
     )
     add(
         p,
@@ -84,7 +91,11 @@ def add_arguments(p: argparse.ArgumentParser) -> dict[str, argparse.Action]:
         type=lang.code,
         help="text language for OCR, like ko, en, ja, zh, de, fr or es (default: lang, ko)",
     )
-    add(p, "--asr", help="mlx, whispercpp or api (default: asr.engine, local only)")
+    add(
+        p,
+        "--asr",
+        help="whispercpp, api or an endpoint you named (default: asr.engine, local only)",
+    )
     add(p, "--refresh", action="store_true", help="ignore cached OCR, speech and fetches")
     add(p, "--pages", type=_pages, help="PDF pages like 1,3-5 (default: all)")
     ocr = p.add_argument_group("OCR")
@@ -356,9 +367,20 @@ def _reader(
         },
         whole=args.whole,
         media_conf=settings["media"],
+        webp=_webp(args, settings["read"]),
         # A failed --reading check comes after conversion, so nothing is written before it
         defer=bool(args.reading),
     )
+
+
+def _webp(args: argparse.Namespace, conf: dict[str, Any]) -> tuple[int, int] | None:
+    """Longest side and WebP quality of saved pictures, or None when they're off"""
+    side, quality = int(conf["picture_side"]), int(conf["picture_quality"])
+    if not 1 <= quality <= 100:
+        raise ValueError(f"read.picture_quality must be 1 to 100, not {quality}")
+    if args.shallow or args.no_pictures or side <= 0:
+        return None
+    return side, quality
 
 
 def _check(args: argparse.Namespace, urls: list[str]) -> None:
