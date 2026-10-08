@@ -31,7 +31,7 @@ class FakeAsr:
         return [Segment(0.2, 1.0, "hello there")]
 
 
-def _no_speech(spec, s):
+def _no_speech(spec, s, down=frozenset()):
     raise MissingTool("speech engine", "install one")
 
 
@@ -62,7 +62,9 @@ def test_parse_subtitles_strips_tags_and_rolling_repeats():
 
 @needs_ffmpeg
 def test_scene_frames_and_sidecar_subtitles(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", lambda spec, s: pytest.fail("subtitles stand in for ASR"))
+    monkeypatch.setattr(
+        asr, "select", lambda spec, s, down=frozenset(): pytest.fail("subtitles stand in for ASR")
+    )
     scenes_video(clip)
     clip.with_suffix(".vtt").write_text(VTT)
     code, out, frames = _read(capsys, str(clip))
@@ -73,7 +75,10 @@ def test_scene_frames_and_sidecar_subtitles(clip, monkeypatch, capsys):
         (4, "scene"),
     ]
     assert all(
-        Path(r["path"]).is_file() and "/attachments/clip.mp4/frames/" in r["path"] for r in frames
+        Path(r["path"]).is_file()
+        and "/attachments/clip.mp4/frames/" in r["path"]
+        and r["path"].endswith(".webp")
+        for r in frames
     )
     md = Path(out["results"][0]["out"]).read_text()
     assert "@00:00:00.5-00:00:01.8| first words" in md
@@ -82,7 +87,7 @@ def test_scene_frames_and_sidecar_subtitles(clip, monkeypatch, capsys):
 
 @needs_ffmpeg
 def test_window_and_asr_offsets(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", lambda spec, s: FakeAsr())
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): FakeAsr())
     scenes_video(clip)
     code, out, frames = _read(capsys, str(clip), "--start", "3", "--end", "6")
     assert code == 0
@@ -121,12 +126,14 @@ def test_missing_speech_engine_warns_but_keeps_frames(clip, monkeypatch, capsys)
     code, out, frames = _read(capsys, str(clip))
     assert code == 0 and len(frames) == 3
     assert any("no speech engine" in w for w in out["warnings"])
-    assert main(["read", str(clip), "--asr", "mlx", "--json"]) == 3
+    assert main(["read", str(clip), "--asr", "whispercpp", "--json"]) == 3
 
 
 @needs_ffmpeg
 def test_subs_only_takes_subtitles_and_nothing_else(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", lambda spec, s: pytest.fail("no ASR with --subs-only"))
+    monkeypatch.setattr(
+        asr, "select", lambda spec, s, down=frozenset(): pytest.fail("no ASR with --subs-only")
+    )
     scenes_video(clip)
     code, out, frames = _read(capsys, str(clip), "--subs-only")
     assert code == 0 and frames == []
@@ -141,7 +148,7 @@ def test_subs_only_takes_subtitles_and_nothing_else(clip, monkeypatch, capsys):
 def test_file_named_like_an_option_is_still_a_file(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(engines, "select", lambda spec, s: [])
-    monkeypatch.setattr(asr, "select", lambda spec, s: FakeAsr())
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): FakeAsr())
     scenes_video(Path("-v.mp4"))
     assert len(_read(capsys, "./-v.mp4")[2]) == 3
 
@@ -216,17 +223,6 @@ def test_the_api_refuses_what_the_parser_would(tmp_path, monkeypatch):
         meltify.read("a.txt", pages=2, reading="agent=mine.txt")
 
 
-@needs_ffmpeg
-def test_the_old_media_command_maps_onto_read(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", _no_speech)
-    scenes_video(clip)
-    assert main(["media", str(clip), "--no-frames", "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["command"] == "read"
-    assert not [r for r in out["results"] if r["kind"] == "frame"]
-    assert out["warnings"][0].startswith("meltify media is deprecated and will be removed in 0.4.0")
-
-
 def test_a_url_to_a_private_address_never_reaches_yt_dlp(tmp_path, monkeypatch, capsys):
     import socket
     import sys
@@ -279,15 +275,6 @@ def test_frames_over_the_cap_are_reported(clip, monkeypatch, capsys):
 
 
 @needs_ffmpeg
-def test_the_old_media_command_keeps_its_interval_frames(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", _no_speech)
-    scenes_video(clip)
-    assert main(["media", str(clip), "--keep-duplicates", "--json", "--limit", "0"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert any(r["reasons"][0] == "interval" for r in out["results"] if r["kind"] == "frame")
-
-
-@needs_ffmpeg
 def test_kept_duplicates_never_crowd_out_a_scene(clip, monkeypatch, capsys):
     monkeypatch.setattr(asr, "select", _no_speech)
     scenes_video(clip)
@@ -302,7 +289,9 @@ def test_kept_duplicates_never_crowd_out_a_scene(clip, monkeypatch, capsys):
 
 @needs_ffmpeg
 def test_media_under_an_odd_name_honors_subs_only(clip, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "select", lambda spec, s: pytest.fail("no ASR with --subs-only"))
+    monkeypatch.setattr(
+        asr, "select", lambda spec, s, down=frozenset(): pytest.fail("no ASR with --subs-only")
+    )
     scenes_video(clip)
     odd = clip.with_suffix(".dat")
     clip.rename(odd)
@@ -341,7 +330,9 @@ def test_a_rerun_clears_the_frames_it_no_longer_keeps(clip, monkeypatch, capsys)
 def test_a_video_in_a_zip_finds_its_subtitles_whatever_the_order(clip, monkeypatch, capsys):
     import zipfile
 
-    monkeypatch.setattr(asr, "select", lambda spec, s: pytest.fail("subtitles stand in for ASR"))
+    monkeypatch.setattr(
+        asr, "select", lambda spec, s, down=frozenset(): pytest.fail("subtitles stand in for ASR")
+    )
     scenes_video(clip)
     with zipfile.ZipFile(clip.parent / "a.zip", "w") as z:
         z.write(clip, "clip.mp4")

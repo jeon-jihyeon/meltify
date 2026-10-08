@@ -33,6 +33,8 @@ PAGED = {"TIFF", "GIF", "PNG", "WEBP"}
 # than PIXEL_GAP gray levels, repeats it. One changed digit spans far more pixels
 SAME_PIXELS = 16
 PIXEL_GAP = 32
+# Claude's vision reads up to this many pixels without scaling the picture down again
+PICTURE_PIXELS = 1_150_000
 
 
 def auto_factor(width: int, height: int) -> float:
@@ -207,3 +209,39 @@ def save(image: Any, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
     return path
+
+
+def shrink(source: Path | bytes, target: Path, side: int, quality: int, frame: int = 1) -> bool:
+    """Save a small WebP of the picture for an agent to look at, False when that fails"""
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(source) if isinstance(source, bytes) else source) as im:
+            if frame > 1:
+                im.seek(frame - 1)
+            w, h = im.size
+            scale = min(1.0, side / max(w, h), (PICTURE_PIXELS / (w * h)) ** 0.5)
+            size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            # Shrinking before flatten keeps a huge scan from sitting in memory at full size,
+            # and lets JPEG decode at a fraction of it. Palettes only resize by nearest pixel
+            if im.mode not in ("P", "1"):
+                im.thumbnail(size, Image.Resampling.LANCZOS, reducing_gap=2.0)
+            image = flatten(im)
+        image.thumbnail(size, Image.Resampling.LANCZOS)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # A run cut off mid-write must not leave a broken file a rerun would reuse
+        partial = target.with_name(f"{target.name}.part")
+        image.save(partial, "WEBP", quality=quality)
+        partial.replace(target)
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        EOFError,
+        MemoryError,
+        Image.DecompressionBombError,
+    ):
+        return False
+    return True

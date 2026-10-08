@@ -1,7 +1,8 @@
 """OCR engines behind one interface
 
 Local engines run on this machine and cost nothing.
-LLM engines send the image to a provider and run only when you name them
+LLM engines send the image to a provider and run only when you name them, unless it's an
+endpoint you serve yourself, which auto runs too
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import os
 import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -66,56 +67,6 @@ class Vision:
 
 
 @dataclass
-class Paddle:
-    lang: str
-    name: str = "paddle"
-    kind: str = LOCAL
-    _ocr: Any = field(default=None, init=False, repr=False)
-
-    def missing(self) -> str | None:
-        return (
-            None if importlib.util.find_spec("paddleocr") else "meltify doctor --install ocr-paddle"
-        )
-
-    def recognize(self, image: Path, size: tuple[int, int]) -> list[TextBox]:
-        # Model loading takes seconds, so reuse one instance for every page and tile
-        if self._ocr is None:
-            # The host check adds seconds and a warning to every run, and the default host works
-            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            from paddleocr import PaddleOCR
-
-            models: dict[str, Any] = {"lang": langs.paddle(self.lang)}
-            resolve = getattr(PaddleOCR, "_get_ocr_model_names", None)
-            if resolve is not None:
-                # PP-OCRv5 pairs every language with the server detector, which takes
-                # about 100 s per A4 page on CPU. The mobile one takes about 6 s
-                # and read the same text on a scanned Korean page
-                _, rec = resolve(None, models["lang"], None)
-                if rec:
-                    models = {
-                        "text_detection_model_name": "PP-OCRv5_mobile_det",
-                        "text_recognition_model_name": rec,
-                    }
-            self._ocr = PaddleOCR(
-                **models,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
-        res = self._ocr.predict(str(image))[0]
-        boxes = res.get("rec_boxes")
-        scores = res.get("rec_scores")
-        return [
-            TextBox(
-                t,
-                tuple(float(v) for v in boxes[i]) if boxes is not None else None,
-                round(float(scores[i]), 3) if scores is not None else None,
-            )
-            for i, t in enumerate(res["rec_texts"])
-        ]
-
-
-@dataclass
 class Remote:
     """Vision LLM that returns plain lines without positions"""
 
@@ -123,19 +74,27 @@ class Remote:
     model: str
     key_env: str
     base_url: str = ""
+    # Set for a model you serve yourself, which auto runs since it costs nothing. It's still a
+    # vision LLM that can guess, so its readings need a local engine to count as agreed
+    endpoint: llm.Endpoint | None = None
     kind: str = REMOTE
 
     def missing(self) -> str | None:
+        if self.endpoint is not None:
+            return self.endpoint.missing()
         return None if os.environ.get(self.key_env) else f"export {self.key_env}=..."
 
     def recognize(self, image: Path, size: tuple[int, int]) -> list[TextBox]:
-        api_key = llm.key(self.key_env)
-        if self.name == "claude":
-            text = llm.anthropic_vision(image, self.model, api_key)
+        if (ep := self.endpoint) is not None:
+            text = llm.openai_vision(
+                image, ep.model, ep.api_key, ep.base_url, ep.prompt, ep.timeout
+            )
+        elif self.name == "claude":
+            text = llm.anthropic_vision(image, self.model, llm.key(self.key_env))
         elif self.name == "gemini":
-            text = llm.gemini_vision(image, self.model, api_key)
+            text = llm.gemini_vision(image, self.model, llm.key(self.key_env))
         else:
-            text = llm.openai_vision(image, self.model, api_key, self.base_url)
+            text = llm.openai_vision(image, self.model, llm.key(self.key_env), self.base_url)
         return [TextBox(line.strip()) for line in text.splitlines() if line.strip()]
 
 
@@ -154,64 +113,50 @@ class Reading:
         return [TextBox(line) for line in self.lines]
 
 
-@dataclass(frozen=True)
-class Listing:
-    """How to make one engine, and how a run may share it"""
-
-    # From the OCR language and the [llm] settings
-    make: Callable[[str, Mapping[str, Any]], Engine]
-    kind: str
-    # Safe to call from several threads at once. Vision and every remote engine build their
-    # own request per call, while Paddle keeps one stateful model per instance
-    shared: bool
-
-
-# Every OCR engine by name. Local ones go first, since body text comes from the first local
-# engine in this order that read anything, and auto picks every installed local one
-ENGINES: dict[str, Listing] = {
-    "vision": Listing(lambda lang, conf: Vision(lang), LOCAL, shared=True),
-    "paddle": Listing(lambda lang, conf: Paddle(lang), LOCAL, shared=False),
-    "claude": Listing(
-        lambda lang, conf: Remote("claude", conf["claude_model"], conf["anthropic_key_env"]),
-        REMOTE,
-        shared=True,
-    ),
-    "gemini": Listing(
-        lambda lang, conf: Remote("gemini", conf["gemini_model"], conf["gemini_key_env"]),
-        REMOTE,
-        shared=True,
-    ),
-    "openai": Listing(
-        lambda lang, conf: Remote(
-            "openai", conf["openai_model"], conf["openai_key_env"], conf["openai_base_url"]
-        ),
-        REMOTE,
-        shared=True,
+# Every built-in OCR engine by name, made from the OCR language and the [llm] settings.
+# Every one is safe to call from several threads at once, since each builds its own request
+ENGINES: dict[str, Callable[[str, Mapping[str, Any]], Engine]] = {
+    "vision": lambda lang, conf: Vision(lang),
+    "claude": lambda lang, conf: Remote("claude", conf["claude_model"], conf["anthropic_key_env"]),
+    "gemini": lambda lang, conf: Remote("gemini", conf["gemini_model"], conf["gemini_key_env"]),
+    "openai": lambda lang, conf: Remote(
+        "openai", conf["openai_model"], conf["openai_key_env"], conf["openai_base_url"]
     ),
 }
-LOCAL_ENGINES = tuple(name for name, listing in ENGINES.items() if listing.kind == LOCAL)
-SHARED = {name for name, listing in ENGINES.items() if listing.shared}
-# What to install when no local engine is there
-INSTALL_HINT = "pip install ocrmac on macOS, meltify doctor --install ocr-paddle elsewhere"
+# Body text comes from the first of these that read anything, and auto picks every one installed
+LOCAL_ENGINES = ("vision",)
+# What to set up when no local engine is there
+INSTALL_HINT = (
+    "pip install ocrmac on macOS, or serve an OCR model behind an OpenAI-compatible endpoint "
+    "and add it under [ocr.endpoints.NAME]"
+)
 
 
-def names() -> str:
-    """Every engine name for help and errors, like `vision, paddle, claude, gemini or openai`"""
-    *rest, last = ENGINES
+def endpoints(settings: Mapping[str, Any]) -> dict[str, llm.Endpoint]:
+    """The OCR models you serve yourself, by the name you gave each"""
+    return llm.endpoints("ocr", settings["ocr"]["endpoints"], set(ENGINES), llm.TIMEOUT)
+
+
+def names(settings: Mapping[str, Any]) -> str:
+    """Every engine name for help and errors, like `vision, claude, gemini or openai`"""
+    *rest, last = [*ENGINES, *endpoints(settings)]
     return f"{', '.join(rest)} or {last}"
 
 
 def build(name: str, settings: Mapping[str, Any]) -> Engine:
-    listing = ENGINES.get(name)
-    if listing is None:
-        raise ValueError(f"unknown OCR engine {name}, use {names()}")
-    return listing.make(settings["lang"], settings["llm"])
+    make = ENGINES.get(name)
+    if make is not None:
+        return make(settings["lang"], settings["llm"])
+    ep = endpoints(settings).get(name)
+    if ep is None:
+        raise ValueError(f"unknown OCR engine {name}, use {names(settings)}")
+    return Remote(name, ep.model, ep.key_env, ep.base_url, ep)
 
 
 def select(spec: str, settings: Mapping[str, Any]) -> list[Engine]:
-    """auto keeps every installed local engine and never pays for an LLM"""
+    """auto keeps every installed local engine and every endpoint, and never pays for an LLM"""
     if spec == "auto":
-        engines = [build(n, settings) for n in LOCAL_ENGINES]
+        engines = [build(n, settings) for n in (*LOCAL_ENGINES, *endpoints(settings))]
         return [e for e in engines if e.missing() is None]
     return [build(n.strip(), settings) for n in spec.split(",") if n.strip()]
 
