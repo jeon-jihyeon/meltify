@@ -244,18 +244,6 @@ def test_pdf_read_traces_each_page_once(tmp_path, monkeypatch):
     assert out.jobs == [] and out.hidden == 3
 
 
-def test_the_old_command_still_runs_with_a_warning(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    pdf = hidden_pdf(tmp_path / "h.pdf")
-    assert main(["hidden", str(pdf), "--json"]) == 0
-    out, spans = _details(capsys, "hidden")
-    assert out["command"] == "read" and len(spans) == len(HIDDEN)
-    assert out["warnings"][0] == (
-        "meltify hidden is deprecated and will be removed in 0.4.0,"
-        " use meltify read --hidden instead"
-    )
-
-
 def test_hidden_says_what_it_left_unchecked(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "notes.md").write_text("plain\n")

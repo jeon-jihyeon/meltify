@@ -102,10 +102,10 @@ def test_plugin_data_dir_and_extras_and_git(sandbox, tmp_path):
     _exe(bindir / "uvx", 'echo uvx "$@"\n')
     # CLAUDE_PLUGIN_DATA replaces the default data dir, so the HOME venv is ignored
     env.update({"CLAUDE_PLUGIN_DATA": str(plugin_data)})
-    env.update({"MELTIFY_EXTRAS": "media,asr-mlx", "MELTIFY_FROM_GIT": "1"})
+    env.update({"MELTIFY_EXTRAS": "media,office", "MELTIFY_FROM_GIT": "1"})
     out = _run(launcher, env, "read", "x").stdout.strip()
     assert out == (
-        f"uvx --quiet --from meltify[media,asr-mlx] @ "
+        f"uvx --quiet --from meltify[media,office] @ "
         f"git+https://github.com/jeon-jihyeon/meltify@v{VERSION} meltify read x"
     )
     (plugin_data / "venv/.meltify-version").write_text(VERSION)

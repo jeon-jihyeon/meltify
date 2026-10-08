@@ -77,6 +77,8 @@ def _unknown(layer: Mapping[str, Any], base: Mapping[str, Any], path: Path) -> l
 
 def _coerce(name: str, raw: str, like: Any) -> Any:
     # The packaged default decides the type, since env values are always plain strings
+    if isinstance(like, dict):
+        raise ConfigError(f"{name}: tables like this one can only be set in a config file")
     if isinstance(like, bool):
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     try:

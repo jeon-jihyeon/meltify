@@ -1,3 +1,4 @@
+import io
 import json
 import re
 import shutil
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from meltify import imaging
+from meltify import config, imaging
 from meltify.cli import main
 from meltify.converters import embeds, metafile, office, quicklook, render, run, sheet
 from meltify.engines import asr
@@ -16,7 +17,7 @@ from meltify.engines import ocr as engines
 from meltify.engines.asr import Segment
 from meltify.engines.ocr import LOCAL, TextBox
 from meltify.evidence import Src
-from meltify.safe import MissingTool
+from meltify.safe import MissingTool, Unreachable
 from tests.fixtures.make_docs import (
     card,
     embedded_docx,
@@ -194,7 +195,7 @@ def test_disputed_and_unchecked_markdown(cached, monkeypatch, capsys):
         Fake("paddle", ["TOTAL 665", "총 1,250"]),
     )
     (cached / "menu.png").write_bytes(card("TOTAL 655", (400, 100)))
-    rows, out = _read(capsys, cached / "menu.png")
+    rows, out = _read(capsys, cached / "menu.png", "--no-pictures")
     md = Path(rows[f"{cached}/menu.png"]["out"]).read_text()
     assert md == (
         f"<!-- meltify source: {cached}/menu.png -->\n"
@@ -242,14 +243,115 @@ def test_auto_never_picks_paid_engines(cached, monkeypatch):
         monkeypatch.setenv(key, "set")
     settings = config.load()
     rec = Recognizer(Options(), settings, lambda m: None)
-    assert {e.name for e in rec.ocr_engines()} <= {"vision", "paddle"}
+    assert {e.name for e in rec.ocr_engines()} <= {"vision"}
 
-    monkeypatch.setattr(asr.Mlx, "missing", lambda self: "no")
     monkeypatch.setattr(asr.WhisperCpp, "missing", lambda self: "no")
     rec = Recognizer(Options(), settings, lambda m: None)
     assert rec.asr_engine() is None
     with pytest.raises(MissingTool):
-        Recognizer(Options(asr="mlx"), settings, lambda m: None).asr_engine()
+        Recognizer(Options(asr="whispercpp"), settings, lambda m: None).asr_engine()
+
+
+def test_a_speech_endpoint_you_serve_goes_first_and_a_broken_one_warns(cached, monkeypatch):
+    from meltify.recognize import Options, Recognizer
+
+    monkeypatch.setattr(asr.WhisperCpp, "missing", lambda self: None)
+    settings = config.load()
+    table = {"base_url": "http://127.0.0.1:9000/v1", "model": "whisper"}
+    settings["asr"]["endpoints"] = {"served": table}
+    assert Recognizer(Options(), settings, lambda m: None).asr_engine().name == "served"
+
+    table["base_url"] = "https://api.openai.com/v1"
+    warned: list[str] = []
+    assert Recognizer(Options(), settings, warned.append).asr_engine().name == "whispercpp"
+    assert any("asr endpoint served is skipped" in w for w in warned)
+
+
+def test_a_server_that_stops_answering_is_asked_once(cached, monkeypatch):
+    from meltify.recognize import Options, Recognizer
+
+    calls = []
+
+    @dataclass
+    class Down:
+        name: str = "vl"
+        kind: str = LOCAL
+
+        def missing(self):
+            return None
+
+        def recognize(self, image, size):
+            calls.append(image)
+            raise Unreachable("nothing answers at http://127.0.0.1:9/v1")
+
+    monkeypatch.setattr(engines, "ready", lambda spec, settings: [Down()])
+    warned: list[str] = []
+    rec = Recognizer(Options(), config.defaults(), warned.append)
+    data = card("PAGE 1", (200, 60))
+
+    def load():
+        from PIL import Image
+
+        return Image.open(io.BytesIO(data))
+
+    assert rec.picture("sha0", load, "a.png", "image", True).readings == []
+    # With the only engine down, later pictures stay needs instead of waiting on it again
+    for n in (1, 2):
+        with pytest.raises(MissingTool):
+            rec.picture(f"sha{n}", load, f"{n}.png", "image", True)
+    assert len(calls) == 1
+    assert warned == [
+        "vl is skipped for the rest of this run: nothing answers at http://127.0.0.1:9/v1"
+    ]
+
+
+def test_a_speech_server_that_stops_hands_over_to_the_next_engine(cached, monkeypatch, tmp_path):
+    from meltify.recognize import Options, Recognizer
+
+    @dataclass
+    class Talks:
+        name: str
+        down: bool = False
+
+        def missing(self):
+            return None
+
+        def transcribe(self, audio, lang):
+            if self.down:
+                raise Unreachable("nothing answers at http://127.0.0.1:9000/v1")
+            return [Segment(0, 1, "hello")]
+
+    served, local = Talks("served", down=True), Talks("whispercpp")
+
+    def select(spec, settings, down=frozenset()):
+        return local if "served" in down else served
+
+    monkeypatch.setattr(asr, "select", select)
+    monkeypatch.setattr("meltify.ffmpeg.has_audio", lambda path: True)
+    monkeypatch.setattr("meltify.ffmpeg.audio", lambda path, out, window: out)
+    rec = Recognizer(Options(), config.defaults(), lambda m: None)
+    clip = tmp_path / "a.m4a"
+    clip.write_bytes(b"audio")
+    assert rec.speech("sha", clip, "a.m4a", True) == [Segment(0, 1, "hello")]
+    assert rec.asr_engine() is local
+
+
+def test_speech_endpoints_take_no_prompt():
+    settings = config.defaults()
+    table = {"base_url": "http://127.0.0.1:9000/v1", "model": "whisper", "prompt": "x"}
+    settings["asr"]["endpoints"] = {"served": table}
+    with pytest.raises(ValueError, match="unknown field prompt"):
+        asr.endpoints(settings)
+
+
+def test_cache_keys_follow_the_model_and_server(cached):
+    from meltify.recognize import _identity
+
+    gpt = engines.build("openai", config.defaults())
+    served = config.defaults()
+    served["llm"]["openai_model"] = "another-model"
+    assert _identity(gpt) != _identity(engines.build("openai", served))
+    assert _identity(engines.Vision("ko")) == "vision"
 
 
 def test_no_engine_keeps_the_01_needs_and_skips_loading(cached, monkeypatch, capsys):
@@ -284,7 +386,7 @@ def test_video_gets_transcript_scenes_and_capped_frames(cached, monkeypatch, cap
 
     (vision,) = _engines(monkeypatch, Fake("vision", ["SLIDE"]))
     speech = FakeAsr()
-    monkeypatch.setattr(asr, "select", lambda spec, s: speech)
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): speech)
     video = scenes_video(cached / "clip.mp4")
     rows, _ = _read(capsys, video, "--frames", "2")
     md = Path(rows[str(video)]["out"]).read_text()
@@ -303,7 +405,7 @@ def test_speech_language_is_detected_unless_asr_lang_names_one(cached, monkeypat
     import wave
 
     speech = FakeAsr()
-    monkeypatch.setattr(asr, "select", lambda spec, s: speech)
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): speech)
     clip = cached / "talk.wav"
     with wave.open(str(clip), "wb") as w:
         w.setnchannels(1)
@@ -405,7 +507,7 @@ def test_url_media_uses_subtitles_instead_of_speech(cached, monkeypatch, capsys)
 
     _fake_web(monkeypatch, cached, "media")
     speech = FakeAsr()
-    monkeypatch.setattr(asr, "select", lambda spec, s: speech)
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): speech)
 
     def download(url, out_dir, langs, subs_only, height, allow_private):
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -507,7 +609,7 @@ def test_ffmpeg_failure_on_one_video_leaves_a_need_not_a_crash(cached, monkeypat
     from meltify.recognize import Options, Recognizer
 
     _engines(monkeypatch, Fake("vision", ["frame text"]))
-    monkeypatch.setattr(asr, "select", lambda spec, s: FakeAsr())
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): FakeAsr())
     monkeypatch.setattr(ffmpeg, "has_audio", lambda path: pytest.fail("frames are tried first"))
 
     def refuse(path, out_dir, threshold, window):
@@ -519,7 +621,7 @@ def test_ffmpeg_failure_on_one_video_leaves_a_need_not_a_crash(cached, monkeypat
     image = cached / "a.png"
     image.write_bytes(card("STILL READ", (300, 100)))
     warned = []
-    rec = Recognizer(Options(), {}, warned.append)
+    rec = Recognizer(Options(), config.defaults(), warned.append)
     jobs = [
         RecognizeJob("video", Src("pic.qqq"), path=clip, listen=False),
         RecognizeJob("image", Src("a.png"), path=image),
@@ -550,7 +652,7 @@ def test_rendered_pages_key_on_their_source_not_the_render(tmp_path, monkeypatch
     monkeypatch.setattr(render, "convert_to", convert_to)
     pdfs = [render.to_pdf(source, out_dir=tmp_path / f"r{n}") for n in range(2)]
     assert pdfs[0].read_bytes() != pdfs[1].read_bytes()
-    reader = Recognizer(Options(), {}, print)
+    reader = Recognizer(Options(), config.defaults(), print)
     keys = {reader.key(RecognizeJob("page", Src(str(source), page=1), path=p)) for p in pdfs}
     assert len(keys) == 1
 
@@ -587,13 +689,13 @@ def _cards(folder, n):
 def test_uncached_pictures_are_read_side_by_side_in_job_order(cached, monkeypatch, capsys):
     from meltify import recognize
 
-    vision, paddle = _engines(
-        monkeypatch, Slow("vision", ["SAME"]), Slow("paddle", ["SAME"], delay=0.05)
+    vision, served = _engines(
+        monkeypatch, Slow("vision", ["SAME"]), Slow("served", ["SAME"], delay=0.05)
     )
     folder = _cards(cached / "in", 6)
     rows, _ = _read(capsys, folder)
-    # Vision overlaps, while Paddle keeps one model that takes a job at a time
-    assert vision.peak > 1 and paddle.peak == 1
+    # Every OCR engine builds its own request, so none of them waits on a lock
+    assert vision.peak > 1 and served.peak > 1
     parallel = {c: Path(r["out"]).read_text() for c, r in rows.items()}
 
     monkeypatch.setattr(recognize, "WORKERS", 1)
@@ -641,7 +743,7 @@ def test_big_pictures_wait_for_ocr_on_disk_with_the_same_cache_key(tmp_path, mon
         held = reader.outputs[0].converted.jobs
         assert held[0].data is None and held[0].path.read_bytes() == big
         assert held[1].data == small
-        rec = Recognizer(Options(), {}, lambda m: None)
+        rec = Recognizer(Options(), config.defaults(), lambda m: None)
         assert [rec.key(j) for j in held] == [rec.key(j) for j in jobs]
         spill = held[0].path.parent
     finally:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import importlib
+import os
 import shutil
 import threading
 from collections.abc import Callable
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from meltify import passwords
-from meltify.converters import Converted, RecognizeJob, place
+from meltify.converters import Block, Converted, RecognizeJob, place
 from meltify.converters.run import current
 from meltify.evidence import Src, finding
 from meltify.files import flat_name, fresh, member_name, unique_name, work_name
@@ -82,6 +84,7 @@ class Reader:
         fetch_opts: dict[str, Any] | None = None,
         whole: bool = False,
         media_conf: dict[str, Any] | None = None,
+        webp: tuple[int, int] | None = None,
     ) -> None:
         self.out_dir = out_dir
         self.names = names
@@ -93,6 +96,8 @@ class Reader:
         self.fetch_opts = fetch_opts or {}
         self.whole = whole
         self.media_conf = media_conf or {}
+        # Longest side and quality of the WebP saved per picture, None for none
+        self.webp = webp
         self.outputs: list[Output] = []
         # Pictures only one engine read, counted once recognition is done
         self.unchecked = 0
@@ -207,7 +212,8 @@ class Reader:
             with self.out_lock:
                 self.hidden_unchecked += 1
         target = self.out_dir / f"{name}.md"
-        # Frames and renders from an earlier run would sit beside this run's in a grep
+        # Frames and renders from an earlier run would sit beside this run's in a grep. Pictures
+        # go when the markdown linking them is rewritten, so a failed run keeps both
         for made in ("frames", "contrast"):
             shutil.rmtree(self.out_dir / "attachments" / name / made, ignore_errors=True)
         row.update(
@@ -223,6 +229,7 @@ class Reader:
             # Nothing waits on recognition, so write it now instead of holding its text until
             # the last file is read
             row["chars"] = converted.chars
+            self._prune_pictures(name, set())
             target.parent.mkdir(parents=True, exist_ok=True)
             converted.write(target, origin)
         rows = [row, *self._details(converted, name, target)]
@@ -389,11 +396,15 @@ class Reader:
         self.outputs.sort(key=lambda o: o.row["cite"])
         jobs = [j for o in self.outputs for j in o.converted.jobs]
         outcomes = recognize(jobs) if recognize and jobs else None
+        pictures = self._save_pictures(
+            [(o.target.stem, j) for o in self.outputs for j in o.converted.jobs]
+        )
         details: list[dict[str, Any]] = []
         n = 0
         for o in self.outputs:
             mine = o.converted.jobs
             got = outcomes[n : n + len(mine)] if outcomes is not None else None
+            links = pictures[n : n + len(mine)]
             n += len(mine)
             if got is None:
                 left = job_needs(mine)
@@ -419,17 +430,97 @@ class Reader:
             o.converted.needs = left + o.converted.needs
             o.row["needs"] = left + o.row["needs"]
             o.row["chars"] = o.converted.chars
+            # After chars, since a link points at a picture and isn't text read from the item
+            _link_pictures(o.converted, mine, links)
+            self._prune_pictures(o.target.stem, {Path(link).name for link in links if link})
             o.target.parent.mkdir(parents=True, exist_ok=True)
             o.converted.write(o.target, o.origin)
         return details
 
+    def _save_pictures(self, jobs: list[tuple[str, RecognizeJob]]) -> list[str | None]:
+        """A small WebP per image job, as its path from the markdown, or None for no picture"""
+        from meltify import imaging
+
+        if not self.webp:
+            return [None] * len(jobs)
+        side, quality = self.webp
+        digests: dict[Path, str] = {}
+
+        def link(stem: str, job: RecognizeJob) -> str | None:
+            if job.kind != "image":
+                return None
+            if job.path is None:
+                digest = hashlib.sha256(job.data or b"").hexdigest()
+            elif job.path not in digests:
+                # Every kept frame of a TIFF is a job on the same file, so it's hashed once
+                with job.path.open("rb") as f:
+                    digest = digests[job.path] = hashlib.file_digest(f, "sha256").hexdigest()
+            else:
+                digest = digests[job.path]
+            # The size and quality are in the name, so a rerun reuses only an identical file
+            key = f"{digest}:{job.src.frame or 1}:{side}:{quality}"
+            name = hashlib.sha256(key.encode()).hexdigest()[:16]
+            return f"attachments/{stem}/pictures/{name}.webp"
+
+        links = [link(stem, job) for stem, job in jobs]
+        todo = {
+            path: job
+            for path, (_, job) in zip(links, jobs, strict=True)
+            if path and not (self.out_dir / path).is_file()
+        }
+
+        def save(path: str) -> bool:
+            job = todo[path]
+            source = job.data if job.path is None else job.path
+            assert source is not None
+            return imaging.shrink(source, self.out_dir / path, side, quality, job.src.frame or 1)
+
+        # Pillow decodes, resizes and encodes outside the GIL, so threads share the work
+        with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+            failed = {path for path, ok in zip(todo, pool.map(save, todo), strict=True) if not ok}
+        return [None if path in failed else path for path in links]
+
+    def _prune_pictures(self, stem: str, keep: set[str]) -> None:
+        """Remove pictures of an earlier run the markdown about to be written won't link"""
+        folder = self.out_dir / "attachments" / stem / "pictures"
+        if not keep:
+            shutil.rmtree(folder, ignore_errors=True)
+            return
+        for file in folder.iterdir():
+            if file.name not in keep:
+                file.unlink(missing_ok=True)
+
     def _frames(self, frames: list[dict[str, Any]], target: Path) -> list[dict[str, Any]]:
-        """Frame rows with each picture copied beside the item's markdown"""
+        """Frame rows with each picture saved beside the item's markdown"""
+        from meltify import imaging
+
         rows = []
         for f in frames:
             file = Path(f.pop("file"))
-            saved = self.out_dir / "attachments" / target.stem / "frames" / file.name
-            saved.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(file, saved)
+            folder = self.out_dir / "attachments" / target.stem / "frames"
+            saved = folder / f"{file.stem}.webp"
+            if not self.webp or not imaging.shrink(file, saved, *self.webp):
+                saved = folder / file.name
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(file, saved)
             rows.append({**f, "path": str(saved), "chars": 0, "needs": [], "out": str(target)})
         return rows
+
+
+def _link_pictures(converted: Converted, jobs: list[RecognizeJob], links: list[str | None]) -> None:
+    """Link each picture first in its OCR block, or in a block of its own when it has none"""
+    heads: dict[Src, Block] = {}
+    for b in converted.blocks:
+        heads.setdefault(b.src, b)
+    rest = []
+    for job, link in zip(jobs, links, strict=True):
+        if link is None:
+            continue
+        line = f"![picture]({link})"
+        block = heads.get(job.src)
+        if block is not None:
+            block.text = f"{line}\n{block.text}"
+        else:
+            heads[job.src] = Block(job.src, line)
+            rest.append(heads[job.src])
+    converted.blocks = place(converted.blocks, rest)

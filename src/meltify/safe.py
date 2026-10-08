@@ -23,6 +23,10 @@ class MissingTool(Exception):
         self.hint = hint
 
 
+class Unreachable(Exception):
+    """An engine's server didn't answer, so every later call this run would wait and fail too"""
+
+
 @dataclass
 class Outcome:
     value: Any = None
@@ -37,7 +41,7 @@ def attempt(fn: Callable[..., T], *args: Any, **kwargs: Any) -> Outcome:
     # One bad file or engine shouldn't stop a batch, so keep the error as data
     try:
         return Outcome(value=fn(*args, **kwargs))
-    except MissingTool:
+    except (MissingTool, Unreachable):
         raise
     except Exception as e:  # noqa: BLE001
         return Outcome(error=error_note(e, ITEM_NOTE))

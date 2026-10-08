@@ -10,13 +10,13 @@ The data directory below is `$CLAUDE_PLUGIN_DATA` when the plugin sets it, else 
 
 - `read --engines` with the `claude`, `gemini` or `openai` engine uploads each prepared image or its tiles to that provider
 - `read --asr api` uploads the extracted audio to the configured transcription endpoint
+- With `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]`, plain `read` sends images or audio to the servers you configured, and `doctor` asks each for its model list. meltify only accepts hosts that resolve to loopback or private addresses, so a hosted API never gets data you didn't name it for. The check runs when the run starts and isn't pinned per request, so use an IP or a host name you control
 - `doctor --probe` makes one tiny request per configured key
 - `read` with a URL fetches that URL, its redirects and the site's `robots.txt`. With `--render`, the headless browser also loads the page's scripts, styles and API calls
 - `read` with a video URL downloads the video and its subtitles through yt-dlp
 - The plugin launcher runs `uvx` when it can't find a local meltify of its version, and uv downloads the package and its dependencies
 - `doctor --install` downloads the named extra and its dependencies into a venv in the data directory, plus Python 3.12 if uv doesn't have it yet. `--install render` also downloads Playwright's Chromium when it can't find Google Chrome. `--install archive` and `--install all` also download 7-Zip, and `--install libreoffice` downloads a portable LibreOffice. See [Downloaded programs](#downloaded-programs)
-- The local PaddleOCR and MLX Whisper engines download their model weights from their publishers the first time they run, which `read` triggers too when it meets an image or a recording. PaddleOCR keeps them under `~/.paddlex`, MLX Whisper in the Hugging Face cache
-- Nothing else touches the network. Once the models are cached, local engines and every other command run offline
+- Nothing else touches the network. Local engines and every other command run offline
 
 ## URLs in `read`
 
@@ -86,7 +86,7 @@ Some formats need a program outside Python. Each one runs with an argument list 
 `read` also runs its own work in parallel:
 
 - With `--jobs` above 1 (8 by default), PDFs convert in worker processes started with `spawn`, since PyMuPDF isn't thread-safe. When you call `meltify.read` from your own script, PDFs stay in the calling process instead, since `spawn` would import that script again in every worker
-- OCR and speech run up to 4 jobs at once. PaddleOCR and the speech engines keep one stateful model each, so each takes one job at a time under its own lock, while Apple Vision and paid API engines take jobs side by side
+- OCR and speech run up to 4 jobs at once. whisper.cpp runs one large model per call, so it takes one job at a time, while Apple Vision and every HTTP engine take jobs side by side
 
 ## Downloaded programs
 

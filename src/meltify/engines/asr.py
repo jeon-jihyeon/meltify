@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import platform
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,30 +27,6 @@ class Engine(Protocol):
     def missing(self) -> str | None: ...
 
     def transcribe(self, audio: Path, lang: str) -> list[Segment]: ...
-
-
-@dataclass
-class Mlx:
-    model: str
-    name: str = "mlx"
-
-    def missing(self) -> str | None:
-        if sys.platform != "darwin" or platform.machine() != "arm64":
-            return "MLX needs Apple Silicon"
-        return (
-            None if importlib.util.find_spec("mlx_whisper") else "meltify doctor --install asr-mlx"
-        )
-
-    def transcribe(self, audio: Path, lang: str) -> list[Segment]:
-        import mlx_whisper
-
-        r = mlx_whisper.transcribe(
-            str(audio), path_or_hf_repo=self.model, language=langs.whisper(lang)
-        )
-        return [
-            Segment(round(s["start"], 2), round(s["end"], 2), s["text"].strip())
-            for s in r["segments"]
-        ]
 
 
 @dataclass
@@ -85,60 +58,82 @@ class WhisperCpp:
 
 @dataclass
 class Api:
-    """Any OpenAI-compatible transcription endpoint"""
+    """Any OpenAI-compatible transcription endpoint, hosted or served yourself"""
 
     model: str
     key_env: str
     base_url: str
     name: str = "api"
+    # Set for a model you serve yourself, which auto may pick
+    endpoint: llm.Endpoint | None = None
 
     def missing(self) -> str | None:
+        if self.endpoint is not None:
+            return self.endpoint.missing()
         return None if os.environ.get(self.key_env) else f"export {self.key_env}=..."
 
     def transcribe(self, audio: Path, lang: str) -> list[Segment]:
-        import httpx
-
         data: dict[str, Any] = {"model": self.model, "response_format": "verbose_json"}
         if (code := langs.whisper(lang)) is not None:
             data["language"] = code
+        ep = self.endpoint
+        api_key = llm.key(self.key_env) if ep is None else ep.api_key
         with audio.open("rb") as f:
-            r = httpx.post(
+            r = llm.post(
                 f"{self.base_url.rstrip('/')}/audio/transcriptions",
                 data=data,
                 files={"file": (audio.name, f, "audio/wav")},
-                headers={"Authorization": f"Bearer {llm.key(self.key_env)}"},
-                timeout=600,
+                headers=llm.bearer(api_key),
+                timeout=SPEECH_TIMEOUT if ep is None else ep.timeout,
             )
-        r.raise_for_status()
         body = r.json()
         segments = body.get("segments") or [{"start": 0, "end": 0, "text": body.get("text", "")}]
         return [Segment(float(s["start"]), float(s["end"]), s["text"].strip()) for s in segments]
 
 
+# A long recording takes minutes to transcribe in one request
+SPEECH_TIMEOUT = 600.0
+BUILT_IN = ("whispercpp", "api")
+INSTALL_HINT = (
+    "brew install whisper-cpp, serve a speech model behind an OpenAI-compatible endpoint "
+    "and add it under [asr.endpoints.NAME], or --asr api"
+)
+
+
+def endpoints(settings: dict[str, Any]) -> dict[str, llm.Endpoint]:
+    """The speech models you serve yourself, by the name you gave each"""
+    # A transcription request has no prompt to set
+    fields = {k: v for k, v in llm.FIELDS.items() if k != "prompt"}
+    return llm.endpoints("asr", settings["asr"]["endpoints"], set(BUILT_IN), SPEECH_TIMEOUT, fields)
+
+
 def engines(settings: dict[str, Any]) -> dict[str, Engine]:
     conf = settings["asr"]
     llm_conf = settings["llm"]
-    return {
-        "mlx": Mlx(conf["model"]),
+    found: dict[str, Engine] = {
         "whispercpp": WhisperCpp(conf["whispercpp_model"]),
         "api": Api(conf["api_model"], llm_conf["openai_key_env"], llm_conf["openai_base_url"]),
     }
+    for name, ep in endpoints(settings).items():
+        found[name] = Api(ep.model, ep.key_env, ep.base_url, name, ep)
+    return found
 
 
-def select(spec: str, settings: dict[str, Any]) -> Engine:
+def select(spec: str, settings: dict[str, Any], down: frozenset[str] = frozenset()) -> Engine:
+    """The engine `spec` names, or for auto the first one ready, passing over those `down`"""
     candidates = engines(settings)
     if spec != "auto":
         engine = candidates.get(spec)
         if engine is None:
-            raise ValueError(f"unknown ASR engine {spec}, use mlx, whispercpp or api")
+            raise ValueError(f"unknown ASR engine {spec}, use {', '.join(candidates)}")
+        if spec in down:
+            raise MissingTool(spec, "its server stopped answering earlier in this run")
         if (why := engine.missing()) is not None:
             raise MissingTool(spec, why)
         return engine
-    # Never pick the paid API automatically
-    for name in ("mlx", "whispercpp"):
-        if candidates[name].missing() is None:
+    # Never pick the paid API automatically. A model you serve yourself was set up on purpose,
+    # so endpoints go first, in the order you listed them
+    for name in (*endpoints(settings), "whispercpp"):
+        if name not in down and candidates[name].missing() is None:
             return candidates[name]
-    raise MissingTool(
-        "speech engine",
-        "meltify doctor --install asr-mlx on Apple Silicon, brew install whisper-cpp, or --asr api",
-    )
+    raise MissingTool("speech engine", INSTALL_HINT)
