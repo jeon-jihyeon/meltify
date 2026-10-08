@@ -160,7 +160,7 @@ Run `meltify doctor` to see what's available. `meltify doctor --install NAME` ad
 | `iwork`, `parquet` | Numbers tables, and Parquet files (first 200 rows plus per-column stats) |
 | `render`, `media` | `read --render` for JavaScript-heavy pages, and video URLs through yt-dlp |
 
-`all` bundles `office`, `archive`, `parquet`, `crypto`, and `media`. Recordings need ffmpeg, and YouTube downloads need deno. LibreOffice covers PowerPoint 95, formula recalculation, and the fallback renderer, and `meltify doctor --install libreoffice` downloads a portable copy.
+`all` bundles `office`, `archive`, `parquet`, `crypto`, `iwork`, and `media`. `render` stays separate, since Playwright also downloads a browser. Recordings need ffmpeg, and YouTube downloads need deno. LibreOffice covers PowerPoint 95, formula recalculation, and the fallback renderer, and `meltify doctor --install libreoffice` downloads a portable copy.
 
 ## Configuration
 

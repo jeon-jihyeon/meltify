@@ -2,6 +2,18 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
+## Unreleased
+
+### Changed
+
+- `all` includes `iwork`. `render` stays separate, since Playwright also downloads a browser
+- The `--out` rerun cleanup is described as it works: any markdown meltify wrote there and this run didn't is removed
+
+### Removed
+
+- `examples/answer.schema.json`, left from the removed `check` command
+- `Src.jpath`, which no converter set. JSON files cite by line
+
 ## 0.4.0
 
 meltify connects to models instead of running them. Bring a model by serving it behind an OpenAI-compatible endpoint. This release removes what 0.3.0 marked for removal, so it's the next minor version.

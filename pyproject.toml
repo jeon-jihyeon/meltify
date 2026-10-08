@@ -55,7 +55,7 @@ iwork = ["numbers-parser>=4"]
 parquet = ["pyarrow>=17"]
 render = ["playwright>=1.50"]
 media = ["yt-dlp>=2026.8.19"]
-all = ["meltify[office,media,archive,parquet,crypto]"]
+all = ["meltify[office,media,archive,parquet,crypto,iwork]"]
 
 [project.urls]
 Repository = "https://github.com/jeon-jihyeon/meltify"

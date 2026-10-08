@@ -18,7 +18,6 @@ from meltify.evidence import MISSING, Envelope, Src, finding
         (Src("mail.eml", parts=("cal.xlsx",), sheet="S", cell="A1"), "mail.eml#att=cal.xlsx#S!A1"),
         (Src("menu.png", bbox=(1, 2, 3, 4)), "menu.png@px(1,2,3,4)"),
         (Src("a.mp4", t=(59.96, 3599.97)), "a.mp4@00:01:00.0-01:00:00.0"),
-        (Src("a.json", jpath="$.items[0]"), "a.json#$.items[0]"),
         (Src("a.pdf", page=2), "a.pdf#p2"),
         (Src("a.xlsx", sheet="Hidden"), "a.xlsx#Hidden"),
     ],
@@ -57,7 +56,6 @@ def test_cite(src, want):
             Src(
                 "all",
                 parts=("m",),
-                jpath="$.a",
                 anchor="h",
                 section=1,
                 page=2,
@@ -72,7 +70,7 @@ def test_cite(src, want):
                 t=(0, 1),
                 line=6,
             ),
-            "all#att=m#$.a#h#s1#p2#slide3#S!B2#para4#ts=9#img5@pt(1,2,3,4)@00:00:00.0-00:00:01.0:6",
+            "all#att=m#h#s1#p2#slide3#S!B2#para4#ts=9#img5@pt(1,2,3,4)@00:00:00.0-00:00:01.0:6",
         ),
     ],
 )

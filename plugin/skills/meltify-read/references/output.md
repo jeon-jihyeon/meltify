@@ -58,7 +58,7 @@ Some rows point at a place inside an item instead of the item itself. They carry
 | `contrast` | with `--contrast`, for each PDF page | `path` of the page rendered in stretched contrast |
 | `frame` | for each video frame kept | `path` of the JPEG, and `reasons`: `scene` or `interval`, plus the time it repeats with `--keep-duplicates` |
 
-A rerun into the same `--out` folder replaces the last run there. Markdown for an item the previous `index.jsonl` listed and this run didn't name at all is deleted, along with its saved attachments, so grepping the folder finds only this run's output. An item that failed this run keeps its previous markdown, and files you put there yourself stay.
+A rerun into the same `--out` folder replaces the last run there. Any markdown meltify wrote there that this run didn't write again is deleted, along with its saved attachments, so grepping the folder finds only this run's output. meltify knows its own files by their first line, so files you put there yourself stay. An item that failed this run keeps its previous markdown, members included, and a run that found no input leaves the folder alone.
 
 ## Exit codes
 
