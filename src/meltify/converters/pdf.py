@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import replace
@@ -8,7 +9,7 @@ from typing import Any
 
 from meltify.converters import Block, Child, Converted, RecognizeJob
 from meltify.converters.limits import MAX_MEMBER_BYTES, human_bytes
-from meltify.converters.run import PdfLook
+from meltify.converters.run import LOCK, PdfLook, workdir
 from meltify.evidence import Src, finding
 from meltify.files import doc_pages
 from meltify.forensics.pdf import DEFAULT_LIMITS, HiddenSpan, Marks, scan_page
@@ -238,6 +239,34 @@ def melt(path: Path, src: Src, look: PdfLook) -> Converted:
     if out.hidden and not look.hidden:
         out.needs.append(f"hidden {out.hidden} spans")
     return out
+
+
+def read_rendered(
+    path: Path,
+    src: Src,
+    draw: Callable[[Path, Path], Path | None],
+    kind: str,
+    prefix: str = "meltify-render-",
+) -> Converted | None:
+    """`path` drawn into a PDF by `draw`, then read like one, or None when nothing was drawn
+
+    Pages cite through the src it's given, so they cite as `a.wpd#p2`. Only PyMuPDF needs
+    the lock, so a slow renderer doesn't hold up other PDFs
+    """
+    folder = workdir(prefix)
+    out = None
+    try:
+        rendered = draw(path, folder)
+        if rendered is not None:
+            with LOCK:
+                # Defaults, since the run's PDF flags speak of the user's own PDFs
+                out = melt(rendered, src, PdfLook())
+            out.kind = kind
+        return out
+    finally:
+        # The OCR stage opens the rendered PDF for image-only pages, so then it has to stay
+        if out is None or not any(job.path is not None for job in out.jobs):
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def _span_row(s: HiddenSpan, src: Src) -> dict[str, Any]:

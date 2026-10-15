@@ -14,7 +14,8 @@ MAX_MEMBER_BYTES = 256 << 20
 MAX_RATIO = 100
 RATIO_FLOOR = 1 << 20
 # What one HWPX document may unpack for its parts in all, and per byte of the document,
-# with a floor that always fits one part at the part limit
+# with a floor that always fits one part at the part limit. A Data Package holds at most
+# this much of its resources in all
 MAX_EMBED_BYTES = 512 << 20
 EMBED_RATIO = 100
 EMBED_FLOOR_BYTES = 64 << 20
@@ -50,7 +51,21 @@ def read_part(z: zipfile.ZipFile, part: str) -> bytes:
     return z.read(checked(z.getinfo(part)))
 
 
-class EmbedBudget:
+class ByteBudget:
+    """Bytes one input may unpack or hold in all, however many parts it spreads them over"""
+
+    def __init__(self, total: int) -> None:
+        self.left = total
+
+    def spend(self, n: int) -> bool:
+        """Take `n` bytes, or nothing and False once they don't fit"""
+        if n > self.left:
+            return False
+        self.left -= n
+        return True
+
+
+class EmbedBudget(ByteBudget):
     """Bytes one HWPX document may unpack while its parts are decrypted into a new package
 
     The rebuilt package sits in memory, and a small file whose parts inflate would
@@ -59,11 +74,4 @@ class EmbedBudget:
     """
 
     def __init__(self, size: int) -> None:
-        self.left = min(MAX_EMBED_BYTES, max(size * EMBED_RATIO, EMBED_FLOOR_BYTES))
-
-    def spend(self, n: int) -> bool:
-        """Take `n` bytes, or nothing and False once they don't fit"""
-        if n > self.left:
-            return False
-        self.left -= n
-        return True
+        super().__init__(min(MAX_EMBED_BYTES, max(size * EMBED_RATIO, EMBED_FLOOR_BYTES)))

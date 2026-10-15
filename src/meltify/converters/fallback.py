@@ -212,7 +212,7 @@ def _media_like(head: bytes) -> bool:
 
 
 def convert(path: Path, src: Src, need: str = NEED) -> Converted:
-    from meltify.converters import render
+    from meltify.converters import pdf, render
 
     suffix = path.suffix.lower()
     context = run.current()
@@ -229,9 +229,7 @@ def convert(path: Path, src: Src, need: str = NEED) -> Converted:
     if suffix in SOFFICE:
         try:
             # LibreOffice, then Quick Look when that misses
-            out = render.read_rendered(
-                path, src, lambda p, d: render.to_pdf(p, out_dir=d), "rendered"
-            )
+            out = pdf.read_rendered(path, src, lambda p, d: render.to_pdf(p, out_dir=d), "rendered")
         except (OSError, RuntimeError, subprocess.SubprocessError) as e:
             # A crashed or hung soffice leaves the cheaper readers below still worth a try
             out = None
@@ -248,7 +246,7 @@ def convert(path: Path, src: Src, need: str = NEED) -> Converted:
     else:
         out = None
         if suffix not in SOFFICE:
-            out = render.read_rendered(path, src, render.preview, "rendered")
+            out = pdf.read_rendered(path, src, render.preview, "rendered")
         out = out or _spotlight(path, src) or _thumbnail(path, src)
     if out is None:
         missing = suffix in SOFFICE and not failed and render.soffice() is None

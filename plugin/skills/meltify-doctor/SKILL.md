@@ -42,7 +42,7 @@ Report what meltify can use on this machine and how to fix what's missing.
    - `office` for Word, PowerPoint, Outlook, EPUB, `.doc`, `.ppt`, `.xls`, `.xlsb`, faster `.xlsx` reading and EMF drawing
    - `archive` for 7z and rar. It also downloads a pinned 7-Zip
    - `crypto` for encrypted Office, zip, HWP and iWork files
-   - `iwork` for Numbers, `parquet` for Parquet, and `media` for video URLs
+   - `iwork` for Numbers, `parquet` for Parquet and Arrow, and `media` for video URLs
    - `render` for `read --render`. It also downloads Chromium when Chrome isn't installed
    - None of the extras adds an OCR or speech engine. For one, suggest serving a model behind an OpenAI-compatible endpoint and adding it under `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]`
 

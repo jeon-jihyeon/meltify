@@ -11,7 +11,7 @@ __pycache__/
 /meltify-out/
 .claude/settings.local.json
 CLAUDE.local.md
-/tmp
+/tmp/
 
 # environment
 .env*

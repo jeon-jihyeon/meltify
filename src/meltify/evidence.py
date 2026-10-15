@@ -33,7 +33,7 @@ class Src:
 
     The cite joins the set fields in this fixed order, each one optional:
 
-        path ("#att=" member)* ["#" jpath] ["#" anchor] ["#s" section] ["#p" page]
+        path ("#att=" member)* ["#" anchor] ["#s" section] ["#p" page]
         ["#slide" slide] ["#frame" frame] ["#" sheet ["!" cell] | "#cell=" cell] ["#para" para]
         ["#ts=" ts] ["#img" img] ["@" unit "(" x0,y0,x1,y1 ")"] ["@" start "-" end]
         [":" line]
@@ -51,7 +51,6 @@ class Src:
     cell: str | None = None  # `B2` under a sheet, a notebook cell index without one
     line: int | None = None
     parts: tuple[str, ...] = ()  # attachment or archive members, outermost first
-    jpath: str | None = None  # JSONPath inside a structured file
     anchor: str | None = None  # fragment id inside a web page
     section: int | None = None
     slide: int | None = None
@@ -67,8 +66,6 @@ class Src:
     def cite(self) -> str:
         # Stable one-line form an agent can paste next to a claim
         out = self.path + "".join(f"#att={p}" for p in self.parts)
-        if self.jpath:
-            out += f"#{self.jpath}"
         if self.anchor:
             out += f"#{self.anchor}"
         if self.section is not None:

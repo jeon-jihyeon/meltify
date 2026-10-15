@@ -14,7 +14,7 @@ import bisect
 import importlib
 import itertools
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -231,6 +231,9 @@ SNIFFS: list[Entry] = []
 # Checks for files a converter decrypts for itself, as "module:function" taking the path and
 # its first bytes, so read never renders what would only show the lock
 SEALS: list[str] = []
+# Manifests that read files of their own, as "module:function" taking a path and returning
+# the resolved files it would read, so a folder read melts those only through it
+CLAIMS: list[str] = []
 
 
 def register(kind: str, target: str, *suffixes: str) -> None:
@@ -251,6 +254,27 @@ def register_sniff(
 
 def register_seal(target: str) -> None:
     SEALS.append(target)
+
+
+def register_claims(target: str) -> None:
+    CLAIMS.append(target)
+
+
+def unclaimed(files: Iterable[Path], given: Iterable[Path]) -> list[Path]:
+    """Drop files a manifest among them reads, so each melts once, through its manifest
+
+    A file in `given`, named by the user rather than found in a folder, always stays
+    """
+    files = list(files)
+    claimed: set[Path] = set()
+    for target in CLAIMS:
+        claims = _load(target)
+        for f in files:
+            claimed |= claims(f)
+    if not claimed:
+        return files
+    kept = {p.resolve() for p in given}
+    return [f for f in files if f.resolve() not in claimed or f.resolve() in kept]
 
 
 def sealed_natively(path: Path, head: bytes) -> bool:
@@ -311,8 +335,9 @@ def video(path: Path, src: Src) -> Converted:
 def recording(kind: Literal["audio", "video"], path: Path, src: Src) -> Converted:
     """A recording, its transcript taken from subtitle files beside it when it has some"""
     from meltify import video
+    from meltify.converters import subtitle
 
-    return video.recording(kind, src, path, video.sidecars(path))
+    return subtitle.recording(kind, src, path, video.sidecars(path))
 
 
 def _magic(*prefixes: bytes) -> Sniff:
@@ -397,6 +422,7 @@ register("notebook", f"{_HERE}.notebook:convert", ".ipynb")
 register("mbox", f"{_HERE}.mbox:convert", ".mbox")
 register("sqlite", f"{_HERE}.sqlite:convert", ".db", ".sqlite", ".sqlite3")
 register("parquet", f"{_HERE}.parquet:convert", ".parquet")
+register("arrow", f"{_HERE}.arrow:convert", ".arrow", ".feather", ".arrows")
 # Registered after TEXT, so these take over .srt and .vtt from the plain text entry
 register("subtitle", f"{_HERE}.subtitle:convert", ".srt", ".vtt", ".ass")
 register("text", f"{_HERE}.text:convert_card", ".vcf", ".ics")
@@ -404,11 +430,17 @@ register("text", f"{_HERE}.text:convert_card", ".vcf", ".ics")
 # Chat exports look like plain text or zip archives, so only their content tells them apart
 register_sniff("kakao", f"{_HERE}.kakao:convert", f"{_HERE}.kakao:sniff", {".txt", ".csv"})
 register_sniff("slack", f"{_HERE}.slack:convert", f"{_HERE}.slack:sniff", {".zip"})
+# A Data Package descriptor is plain JSON, so only its fixed file name tells it apart
+register_sniff(
+    "datapackage", f"{_HERE}.datapackage:convert", f"{_HERE}.datapackage:sniff", {".json"}
+)
+register_claims(f"{_HERE}.datapackage:claims")
 # Magic bytes for files whose name gives no hint
 register_sniff("pdf", f"{_HERE}.pdf:convert", _magic(b"%PDF-"))
 register_sniff("sqlite", f"{_HERE}.sqlite:convert", _magic(b"SQLite format 3\x00"))
 register_sniff("rtf", f"{_HERE}.rtf:convert", _magic(b"{\\rtf"))
 register_sniff("parquet", f"{_HERE}.parquet:convert", _magic(b"PAR1"))
+register_sniff("arrow", f"{_HERE}.arrow:convert", f"{_HERE}.arrow:sniff")
 register_sniff("wordperfect", f"{_HERE}.wordperfect:convert", _wordperfect)
 # Document zips before the archive sniff, so an unnamed one isn't unpacked as a plain zip
 for kind, target, families in (

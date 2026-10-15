@@ -376,6 +376,7 @@ class Reader:
 
     def _media(self, url: str, src: Src, work: Path) -> Converted:
         from meltify import video
+        from meltify.converters import subtitle
 
         if self.shallow:
             return Converted("media", needs=["media"])
@@ -388,7 +389,7 @@ class Reader:
             int(self.media_conf["max_height"]),
             bool(self.fetch_opts.get("allow_private")),
         )
-        return video.recording("video", src, clip, subs)
+        return subtitle.recording("video", src, clip, subs)
 
     def finish(self, recognize: Callable[..., list[Any]] | None) -> list[dict[str, Any]]:
         """Fold recognized text into each item, write its markdown and return its detail rows"""
