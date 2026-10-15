@@ -311,8 +311,9 @@ def video(path: Path, src: Src) -> Converted:
 def recording(kind: Literal["audio", "video"], path: Path, src: Src) -> Converted:
     """A recording, its transcript taken from subtitle files beside it when it has some"""
     from meltify import video
+    from meltify.converters import subtitle
 
-    return video.recording(kind, src, path, video.sidecars(path))
+    return subtitle.recording(kind, src, path, video.sidecars(path))
 
 
 def _magic(*prefixes: bytes) -> Sniff:

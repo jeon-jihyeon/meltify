@@ -419,10 +419,10 @@ def convert(path: Path, src: Src) -> Converted:
 
 
 def _rendered(path: Path, src: Src) -> Converted:
-    from meltify.converters import render
+    from meltify.converters import pdf, render
 
     # Recorded as drawn from the ppt, so its image-only pages hit the OCR cache next run
-    out = render.read_rendered(
+    out = pdf.read_rendered(
         path, src, lambda p, d: render.soffice_pdf(p, d, SOFFICE_TIMEOUT), "legacy", "meltify-ppt-"
     )
     # soffice_pdf raises instead of drawing nothing
