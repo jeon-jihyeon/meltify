@@ -2,7 +2,7 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
-## Unreleased
+## 0.5.0
 
 ### Added
 
