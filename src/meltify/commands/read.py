@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from meltify import __version__, lang
 from meltify.config import pick
-from meltify.converters import SOURCE_MARK
+from meltify.converters import SOURCE_MARK, unclaimed
 from meltify.evidence import Envelope, Src
 from meltify.files import Pages, common_root, flat_names, iter_files
 from meltify.melt import DETAIL, Reader
@@ -286,7 +286,7 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
     urls = [p for p in args.paths if is_url(p)]
     local = [Path(p) for p in args.paths if not is_url(p)]
     _check(args, urls)
-    files = list(iter_files(local))
+    files = unclaimed(iter_files(local), [p for p in local if p.is_file()])
     window = Window(args.start, args.end)
     # Renders, decrypted copies and spilled members stay until OCR has read them, then go
     # with the run instead of waiting for the process to exit

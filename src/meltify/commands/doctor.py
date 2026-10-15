@@ -47,7 +47,7 @@ MODULES = [
     ("pyzipper", "read aes zip", "meltify doctor --install crypto", False),
     ("cryptography", "read encrypted hwp iwork", "meltify doctor --install crypto", False),
     ("numbers_parser", "read numbers", "meltify doctor --install iwork", False),
-    ("pyarrow", "read parquet", "meltify doctor --install parquet", False),
+    ("pyarrow", "read parquet arrow", "meltify doctor --install parquet", False),
     ("playwright", "read --render", "meltify doctor --install render", False),
     ("yt_dlp", "read video urls", "meltify doctor --install media", False),
 ]

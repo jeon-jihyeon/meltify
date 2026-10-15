@@ -1122,7 +1122,7 @@ requires-dist = [
     { name = "pi-heif", specifier = ">=1" },
     { name = "pillow", specifier = ">=11.3" },
     { name = "playwright", marker = "extra == 'render'", specifier = ">=1.50" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=17" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=19" },
     { name = "pymupdf", specifier = ">=1.26" },
     { name = "python-calamine", marker = "extra == 'office'", specifier = ">=0.4" },
     { name = "python-hwpx", specifier = ">=1" },

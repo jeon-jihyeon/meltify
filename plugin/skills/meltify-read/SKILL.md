@@ -2,7 +2,7 @@
 name: meltify-read
 description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, Word, PowerPoint, HWP, mail with attachments, KakaoTalk and Slack exports, zip and other archives, web pages, text, images, screenshots, scans, recordings and video URLs, into cited markdown. Images and scans can be cross-checked by several OCR engines, including your own reading, which flag the numbers they disagree on, recordings are transcribed with frames kept, and PDFs are checked for hidden text. Use whenever an answer, summary or document is built from such files or pages, even one named file, one image or a single URL, instead of opening them yourself with Python, openpyxl, a PDF library, unzip, ffmpeg or curl, so every fact can be quoted with its page, cell, line, box or timestamp. Never answer from a single reading of an image.
 license: MIT
-compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look. Recordings need ffmpeg, video URLs the media extra.
+compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet and Arrow the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look. Recordings need ffmpeg, video URLs the media extra.
 metadata:
   version: "0.4.0"
   cli: meltify read
@@ -69,6 +69,10 @@ Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow 
   - `a.hwp#s1:12`: section 1, line 12 of an HWP file
   - `https://example.com/guide#install:28`: line 28 under the heading with that anchor
   - `call.m4a@00:01:23.4-00:01:27.0`: a transcript span
+  - `datapackage.json#result!row=1`: the first row of the resource named `result` in a Data Package. Each row line starts like `row=3| `, so cite that row as `datapackage.json#result!row=3`. A resource's summary or JSON value sits at `datapackage.json#result`
+  - `result.arrows:1`: the first row of an Arrow file, cited like a text line. Its metadata and summary sit at `result.arrows`
+- In table rows from Data Packages and Arrow, `NULL` is a missing value and `"NULL"` in quotes is the text NULL
+- A table headed `first 20 of 1,000 rows` is a sample. Data Packages and Arrow show only their first 20 rows, and an Arrow summary covers every row. Query the file itself when the answer needs rows past the sample
 - OCR lines start with their position, such as `@px(120,40,380,72)| 48,250` or `@pt(72,95,140,103)| ...`, so a value can be cited down to its box
 - A block whose number two engines read differently ends with `> disputed 765: vision 0, gemini 1`. One with only one engine ends with `> unchecked: one engine`
 - Attachments, archive members, files attached to a PDF and downloaded files are saved and melted as items of their own
@@ -106,6 +110,10 @@ The `needs` column lists follow-up work:
   - `... not read`, such as `2 images not read (over the 256 MiB picture total)`, `iwork preview only`, `first page only, read from a Quick Look preview` or `text only, read by macOS Spotlight without layout or pictures`
   - `WordPerfect read by the built-in walker, ...`: formatting codes may show up in the text, and headers, footers and footnotes are missing
   - `N more rows not read`: a Parquet file showed only its first rows. Query the file itself if the answer needs the rest
+  - `stream ended early after N batches`, `stream ended before its first whole batch` or `file footer missing, read as a stream`: an Arrow file was cut off, so only its whole batches melted
+  - `batch N not read, it unpacks past 256 MiB`: that compressed Arrow batch and every later one stayed unread
+  - `resource NAME: ...`: one resource of a Data Package wasn't melted or was melted in part, like `../x.csv rejected, outside the package`, `missing`, `over the 512 MiB package limit`, `parts have different Arrow schemas` or `JSON cut at 20,000 of N chars`. The rest of the package still melted
+  - `not a Data Package: ...`: the `datapackage.json` didn't parse as a descriptor, so it melted as plain text
   - Anything else starting `empty`, `no ... found` or `unreadable`, or saying `skipped`, `stopped`, `nested items beyond depth 3` or `archive rejected`: part of the item, often an attachment or archive member, wasn't melted
 - `unsupported format`: nothing could read the file. Say so instead of guessing at its content
 

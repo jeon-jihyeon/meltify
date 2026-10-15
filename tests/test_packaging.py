@@ -82,3 +82,18 @@ def test_help_lists_exit_codes():
     sub = next(a for a in parser._actions if a.dest == "command")
     for name in COMMANDS:
         assert "3  a needed engine" in sub.choices[name].format_help()
+
+
+def test_parquet_extra_needs_a_pyarrow_with_the_json_type():
+    # pa.json_ and the arrow.json extension type arrived in pyarrow 19, and older versions
+    # show those columns as plain strings
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extras = project["optional-dependencies"]
+    [spec] = [s for s in extras["parquet"] if s.startswith("pyarrow")]
+    floor = re.fullmatch(r"pyarrow>=(\d+)", spec)
+    assert floor and int(floor.group(1)) >= 19
+
+
+def test_read_reference_states_the_per_file_data_package_cap():
+    text = (ROOT / "plugin/skills/meltify-read/references/output.md").read_text()
+    assert re.search(r"CSV, TSV or JSON Lines resource.*over 256 MiB per file", text)

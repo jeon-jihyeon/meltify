@@ -4,8 +4,15 @@ All notable changes to meltify. Versions follow [semantic versioning](https://se
 
 ## Unreleased
 
+### Added
+
+- Frictionless Data Packages: a `datapackage.json` melts its descriptor, custom properties included, and its CSV, TSV, JSON Lines and JSON resources as sampled rows cited like `datapackage.json#result!row=1`. Missing values from the schema show as `NULL`. Other local resource files, like a PDF in the package, melt as items of their own. Nothing is fetched, and paths that leave the package folder or name hidden files are skipped and listed in `needs`, and so is a resource whose `encoding` isn't a text encoding. A package reads at most 512 MiB from its JSON resources, handed-on files, compressed Arrow batches and every repeat read of a table, and a resource past that is listed in `needs`
+- Reading a folder melts a package's resource files only through its `datapackage.json`
+- Arrow IPC files and streams (`.arrow`, `.feather`, `.arrows`, or sniffed by content): schema metadata, a summary of nulls, min, max and distinct values computed over every row, and the first 20 rows. Files are memory-mapped and the summary never turns rows into Python. A distinct count that would need more than 256 MiB of memory shows as `not computed`. Compressed batches stop before they unpack past 256 MiB. A stream cut off mid-batch keeps every whole batch and says so in `needs`. A timestamp or date outside Python's datetime range shows as Arrow's own text instead of failing the file. Data Package resources in Arrow format melt the same way under their resource name, and a multipart resource whose parts have different Arrow schemas is listed in `needs`. The `parquet` extra covers it
+
 ### Changed
 
+- The `parquet` extra needs pyarrow 19 or later, the first with the `arrow.json` type, so JSON columns of Arrow files keep their type
 - `all` includes `iwork`. `render` stays separate, since Playwright also downloads a browser
 - The `--out` rerun cleanup is described as it works: any markdown meltify wrote there and this run didn't is removed
 

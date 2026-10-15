@@ -88,6 +88,7 @@ Cites look like this:
 | Spreadsheet cell | `calendar.xlsx#Calendar!B7` |
 | Archive member | `bundle.zip#att=docs/b.pdf#p3` |
 | Slide | `deck.pptx#slide4` |
+| Data row | `datapackage.json#result!row=1` |
 | Recording | `call.m4a@00:01:23.4-00:01:27.0` |
 
 ## Taking a closer look
@@ -105,7 +106,7 @@ Cites look like this:
 | Group | Formats | Needs |
 |---|---|---|
 | Documents | PDF, Word `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot`, HWP and HWPX, RTF, ODT, Pages, WordPerfect, EPUB, XPS, FictionBook, MOBI, HTML and Safari `.webarchive`, Markdown and plain text | `office` for Word and EPUB |
-| Spreadsheets | Excel `.xlsx` `.xlsm` `.xltx` `.xltm` `.xlsb` `.xls` `.xlt`, Hancom `.cell`, ODS, Numbers, Parquet, CSV and TSV | `office` for `.xlsb`, `.xls` and `.xlt`, `iwork` for Numbers, `parquet` for Parquet |
+| Spreadsheets | Excel `.xlsx` `.xlsm` `.xltx` `.xltm` `.xlsb` `.xls` `.xlt`, Hancom `.cell`, ODS, Numbers, Parquet, Arrow `.arrow` `.feather` `.arrows`, CSV and TSV | `office` for `.xlsb`, `.xls` and `.xlt`, `iwork` for Numbers, `parquet` for Parquet and Arrow |
 | Slides | PowerPoint `.pptx` `.pptm` `.potx` `.potm` `.ppsx` `.ppsm` `.ppt` `.pps` `.pot`, Hancom `.show`, ODP, Keynote | `office` for PowerPoint and `.show` |
 | Drawings | ODG, SVG and `.svgz`, EMF and WMF with `.emz` and `.wmz`, comic book `.cbz` | |
 | Mail and chat | `.eml`, `.msg`, mbox, KakaoTalk exports, Slack export zips | `office` for `.msg` |
@@ -113,7 +114,7 @@ Cites look like this:
 | Images | PNG, JPEG, WebP, GIF, BMP, TIFF, HEIC, AVIF, JPEG 2000, PSD, ICO, TGA | an OCR engine: Apple Vision on macOS, or a [model you serve](#engines) |
 | Audio and video | mp3, wav, m4a, aac, flac, ogg, opus, wma, aiff, amr, mp4, m4v, mov, mkv, webm, avi, wmv, 3gp, mpg, flv, subtitles | ffmpeg and a speech engine: whisper.cpp with `asr.whispercpp_model` set, or a [model you serve](#engines). Subtitles need neither |
 | Web pages | any http(s) URL, video URLs included | `render` for JavaScript-heavy pages, `media` for video sites |
-| Data | JSON, JSONL, XML, YAML, SQLite, Jupyter notebooks, vCard, iCalendar | |
+| Data | JSON, JSONL, XML, YAML, SQLite, Frictionless Data Packages (`datapackage.json`), Jupyter notebooks, vCard, iCalendar | |
 
 A few things that happen along the way:
 
@@ -157,7 +158,7 @@ Run `meltify doctor` to see what's available. `meltify doctor --install NAME` ad
 | `office` | Word, PowerPoint, Outlook `.msg`, EPUB, legacy `.doc`, `.ppt`, `.xls` and `.xlsb`, faster `.xlsx`, and EMF drawing without LibreOffice |
 | `archive` | 7z and rar through the system libarchive, plus a pinned 7-Zip download for encrypted ones |
 | `crypto` | encrypted Office files, AES zips, and password-protected HWP and iWork files |
-| `iwork`, `parquet` | Numbers tables, and Parquet files (first 200 rows plus per-column stats) |
+| `iwork`, `parquet` | Numbers tables, Parquet files (first 200 rows plus per-column stats), and Arrow files (first 20 rows plus a summary over every row) |
 | `render`, `media` | `read --render` for JavaScript-heavy pages, and video URLs through yt-dlp |
 
 `all` bundles `office`, `archive`, `parquet`, `crypto`, `iwork`, and `media`. `render` stays separate, since Playwright also downloads a browser. Recordings need ffmpeg, and YouTube downloads need deno. LibreOffice covers PowerPoint 95, formula recalculation, and the fallback renderer, and `meltify doctor --install libreoffice` downloads a portable copy.

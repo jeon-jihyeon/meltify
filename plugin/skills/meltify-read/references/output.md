@@ -91,6 +91,8 @@ Every result carries `src` and a one-line `cite`:
 | HWP section line | `notice.hwp#s1:12` |
 | Web page line | `https://example.com/guide#install:28` |
 | Text line | `notes.txt:42` |
+| Data Package row | `datapackage.json#result!row=1` |
+| Arrow or Parquet row | `result.arrows:3` |
 | Media span | `call.m4a@00:01:23.4-00:01:27.0` |
 
 ## Pictures and recordings
@@ -148,5 +150,13 @@ The nearest `meltify.toml` is searched from the working directory up to the git 
 - Pages and Keynote charts are listed in `needs` instead of read, and a Pages or Keynote file with no text records falls back to its embedded preview image
 - meltify can't read DRM-protected HWP files or password-protected WordPerfect files. It also can't read the binary Hancom formats: `.cell` and `.show` files from before 2014, and Hanshow `.hpt` files. Save those again as `.xlsx` or `.pptx`
 - Parquet files show their first 200 rows (`read.parquet_rows`), and the rest are counted in `needs`
+- Arrow files show their first 20 rows, plus a summary computed over every row. A column's distinct count reads `not computed` when counting it would take more than 256 MiB of memory, about 500,000 unique small values
+- A Data Package table read by more than one resource counts toward the 512 MiB package limit from its second read on
+- A Data Package resource whose `encoding` isn't a text encoding, like `base64`, is listed in `needs` and its files melt on their own
+- Data Package resources, CSV, TSV, JSON Lines, JSON and Arrow alike, show their first 20 rows, and the header line counts the rest
+- A Data Package reads at most 512 MiB in all from its JSON resources, the files it hands on and its compressed Arrow batches. CSV and JSON Lines stream, so they don't count
+- A JSON resource or `datapackage.json` over 64 MiB isn't parsed. The resource is listed in `needs`, and the descriptor melts as plain text
+- A CSV, TSV or JSON Lines resource, or any other file a Data Package hands on, over 256 MiB per file isn't read and is listed in `needs`. Arrow resources have no file cap, since they check what their batches unpack
+- Compressed Arrow batches stop before they unpack past 256 MiB per file, and the batches after that stay unread
 - Encrypted 7z and rar need 7-Zip, which `meltify doctor --install archive` downloads. Plain ones open with the system libarchive, a separate package on Linux, with 7-Zip, or with `bsdtar` on macOS
 - `wpd2text` from libwpd reads WordPerfect best, then LibreOffice, and a built-in reader covers the body text without either
