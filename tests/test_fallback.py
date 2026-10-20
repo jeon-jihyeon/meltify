@@ -651,7 +651,7 @@ def _sites():
         "ffprobe": (ffmpeg, "PROBE_TIMEOUT", lambda bin, p: ffmpeg.media_kind(p)),
         "textutil": (fallback, "SPOTLIGHT_TIMEOUT", lambda bin, p: fallback._spotlight_text(p)),
         "mdimport": (fallback, "SPOTLIGHT_TIMEOUT", lambda bin, p: fallback._spotlight_text(p)),
-        "mdls": (quicklook, "MDLS_TIMEOUT", lambda bin, p: quicklook.previewable(p)),
+        "osascript": (quicklook, "TYPE_TIMEOUT", lambda bin, p: quicklook.previewable(p)),
         "wpd2text": (
             wordperfect,
             "TIMEOUT",
@@ -666,7 +666,9 @@ def _sites():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
-@pytest.mark.parametrize("tool", ["ffprobe", "textutil", "mdimport", "mdls", "wpd2text", "7zz"])
+@pytest.mark.parametrize(
+    "tool", ["ffprobe", "textutil", "mdimport", "osascript", "wpd2text", "7zz"]
+)
 def test_a_tool_that_times_out_takes_its_helpers_with_it(tmp_path, monkeypatch, tool):
     import os
     import time
@@ -757,14 +759,14 @@ def test_programs_and_filler_need_no_process(tmp_path, monkeypatch, data):
     assert calls.names == []
 
 
-def test_an_unknown_binary_asks_spotlight_its_type_once_and_skips_ffprobe(tmp_path, monkeypatch):
+def test_an_unknown_binary_asks_its_type_once_and_skips_ffprobe(tmp_path, monkeypatch):
     calls = _Recorded(monkeypatch)
     f = tmp_path / "a.xyz"
     f.write_bytes(BINARY * 100)
     out = fallback.convert(f, Src(str(f)))
     assert out.needs == ["unsupported format"]
-    # mdls says it isn't content, so neither Quick Look nor the Spotlight importer runs
-    assert calls.names == ["mdls"]
+    # A failed type lookup starts neither Quick Look nor the Spotlight importer
+    assert calls.names == ["osascript"]
 
 
 @pytest.mark.parametrize(

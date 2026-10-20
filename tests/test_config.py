@@ -17,6 +17,14 @@ def home(tmp_path):
     return {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
 
+@pytest.fixture
+def no_parent_repo(tmp_path, monkeypatch):
+    # A custom basetemp can sit inside a checkout; this fixture models a tree outside one
+    parents = {parent / ".git" for parent in tmp_path.parents}
+    exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if path in parents else exists(path))
+
+
 def test_defaults_only(tmp_path, home):
     s = config.load(cwd=tmp_path, env=home)
     assert s["lang"] == "ko"
@@ -49,6 +57,7 @@ def test_project_search_stops_at_git_root(tmp_path, home):
     assert s["lang"] == "ko"
 
 
+@pytest.mark.usefixtures("no_parent_repo")
 def test_project_search_without_git_reads_only_cwd(tmp_path, home):
     _write(tmp_path / "meltify.toml", 'lang = "en"\n')
     (tmp_path / "work").mkdir()
@@ -129,6 +138,7 @@ def test_cli_reports_config_error_as_json(tmp_path, monkeypatch, capsys):
     assert "MELTIFY_OCR_UPSCALE" in out["errors"][0]["message"]
 
 
+@pytest.mark.usefixtures("no_parent_repo")
 def test_a_misspelled_setting_warns_instead_of_vanishing(tmp_path, home, monkeypatch, capsys):
     project = _write(
         tmp_path / "meltify.toml",

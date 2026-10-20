@@ -25,11 +25,21 @@ from meltify.converters import run
 
 TIMEOUT = 60
 PREVIEW_TIMEOUT = 30
-MDLS_TIMEOUT = 10
+TYPE_TIMEOUT = 10
 # Type answers kept per path, mtime and size, a few hundred bytes each at most
 MAX_TYPES = 4096
 _TYPES: dict[tuple[str, int, int], bool] = {}
 _TYPES_LOCK = threading.Lock()
+# Spotlight hasn't indexed every new file, so ask Launch Services directly
+TYPE_SCRIPT = """
+ObjC.import('Cocoa');
+function run(argv) {
+  var type = $.NSWorkspace.sharedWorkspace.typeOfFileError(argv[0], null);
+  if (!type || type.isNil()) return 'false';
+  var content = $.NSWorkspace.sharedWorkspace.typeConformsToType(type, 'public.content');
+  return content ? 'true' : 'false';
+}
+"""
 # WebKit draws at 2x, so vector shapes it rasterizes stay sharp enough for OCR
 ZOOM = 2
 # Viewport when the preview doesn't name one, about a letter page in CSS pixels
@@ -145,7 +155,7 @@ def launch(args: Sequence[str], timeout: float) -> int | None:
 
 
 def previewable(path: Path) -> bool:
-    """Whether Spotlight's type tree makes the file a document or picture
+    """Whether Launch Services classifies the file as a document or picture
 
     qlmanage hangs until killed on types without a generator, so every Quick Look and
     Spotlight reader asks this first. The answer is kept per file version, since one
@@ -162,10 +172,10 @@ def previewable(path: Path) -> bool:
             return _TYPES[key]
     try:
         proc = safe.run(
-            ["mdls", "-raw", "-name", "kMDItemContentTypeTree", str(resolved)],
-            timeout=MDLS_TIMEOUT, check=False,
+            ["osascript", "-l", "JavaScript", "-e", TYPE_SCRIPT, str(resolved)],
+            timeout=TYPE_TIMEOUT, check=False,
         )  # fmt: skip
-        found = '"public.content"' in proc.stdout
+        found = proc.returncode == 0 and proc.stdout.strip() == "true"
     except (OSError, subprocess.TimeoutExpired):
         found = False
     with _TYPES_LOCK:

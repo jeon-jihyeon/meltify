@@ -113,6 +113,64 @@ def test_a_hung_run_is_killed_with_its_group(monkeypatch):
     assert killed == [4242]
 
 
+@pytest.mark.parametrize(
+    ("code", "stdout", "expected"),
+    [(0, "true\n", True), (0, "false\n", False), (1, "true\n", False), (0, "", False)],
+)
+def test_type_lookup_is_index_independent_cached_and_argument_safe(
+    tmp_path, monkeypatch, code, stdout, expected
+):
+    path = tmp_path / "new file's.txt"
+    path.write_text("hello")
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        assert args[:4] == ["osascript", "-l", "JavaScript", "-e"]
+        assert args[4] == quicklook.TYPE_SCRIPT and args[5] == str(path.resolve())
+        assert kwargs == {"timeout": quicklook.TYPE_TIMEOUT, "check": False}
+        return subprocess.CompletedProcess(args, code, stdout, "")
+
+    monkeypatch.setattr(quicklook.safe, "run", run)
+    assert quicklook.previewable(path) is expected
+    assert quicklook.previewable(path) is expected
+    assert len(calls) == 1
+    path.write_text("changed content")
+    assert quicklook.previewable(path) is expected
+    assert len(calls) == 2
+    path.unlink()
+    assert quicklook.previewable(path) is False
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("unavailable"), subprocess.TimeoutExpired("osascript", 10)]
+)
+def test_type_lookup_failure_never_starts_preview(tmp_path, monkeypatch, error):
+    path = tmp_path / "note.txt"
+    path.write_text("hello")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(quicklook.safe, "run", fail)
+    monkeypatch.setattr(quicklook, "launch", lambda *args: pytest.fail("preview started"))
+    assert quicklook.previewable(path) is False
+
+
+def test_type_lookup_cache_stays_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(quicklook, "MAX_TYPES", 1)
+    monkeypatch.setattr(quicklook, "_TYPES", {})
+    monkeypatch.setattr(
+        quicklook.safe, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0, "true", "")
+    )
+    for name in ("a.txt", "b.txt"):
+        path = tmp_path / name
+        path.write_text("hello")
+        assert quicklook.previewable(path) is True
+        assert len(quicklook._TYPES) == 1
+
+
 def test_iwork_pages_merge_in_the_order_the_preview_shows_them(tmp_path, monkeypatch):
     def build(folder):
         files = {"Attachment1.pdf": "second slide", "Attachment3.pdf": "first slide"}
