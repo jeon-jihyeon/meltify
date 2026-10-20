@@ -1,6 +1,6 @@
 [project]
 name = "meltify"
-version = "0.5.0"
+version = "0.6.0"
 description = "Melt files of any format into prompt-ready text where every block cites its source"
 readme = "README.md"
 requires-python = ">=3.11.9"
@@ -71,7 +71,11 @@ requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "jsonschema>=4.23",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [tool.uv]
 # Only releases at least 7 days old, so a fresh compromised upload can't reach the lock.

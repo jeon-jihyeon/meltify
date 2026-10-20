@@ -739,7 +739,8 @@ def test_big_pictures_wait_for_ocr_on_disk_with_the_same_cache_key(tmp_path, mon
         jobs = [
             RecognizeJob("image", Src("a.docx", img=n), data=d) for n, d in ((1, big), (2, small))
         ]
-        reader.keep(Converted("office", jobs=jobs), "a.docx", 0, {}, "a.docx")
+        monkeypatch.setattr(reader, "_melt", lambda *args: Converted("office", jobs=jobs))
+        reader.one(tmp_path / "a.docx", Src("a.docx"), "a.docx")
         held = reader.outputs[0].converted.jobs
         assert held[0].data is None and held[0].path.read_bytes() == big
         assert held[1].data == small

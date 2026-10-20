@@ -2,6 +2,18 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
+## Unreleased
+
+### Added
+
+- Read results expose artifact references and known unread locations. `--content` or Python `content=True` includes cited body blocks without parsing Markdown; default results and index don't duplicate body text. `complete` distinguishes read coverage from execution success in `ok`. Video frame gaps keep their timestamps, and capped samples retain their kept and total counts
+- A packaged JSON Schema describes the additive `meltify/v1` envelope for CLI and Python consumers
+
+### Fixed
+
+- Quick Look identifies newly created files through Launch Services without waiting for Spotlight to index them
+- Non-finite video settings and time bounds are refused before output is written
+
 ## 0.5.0
 
 ### Added

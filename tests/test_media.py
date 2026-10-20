@@ -223,7 +223,7 @@ def test_the_api_refuses_what_the_parser_would(tmp_path, monkeypatch):
         meltify.read("a.txt", pages=2, reading="agent=mine.txt")
 
 
-def test_a_url_to_a_private_address_never_reaches_yt_dlp(tmp_path, monkeypatch, capsys):
+def test_a_url_to_a_non_public_address_never_reaches_yt_dlp(tmp_path, monkeypatch, capsys):
     import socket
     import sys
 
@@ -232,13 +232,13 @@ def test_a_url_to_a_private_address_never_reaches_yt_dlp(tmp_path, monkeypatch, 
     monkeypatch.setattr(
         socket,
         "getaddrinfo",
-        lambda host, port, *a, **k: real("10.0.0.7", port, type=socket.SOCK_STREAM),
+        lambda host, port, *a, **k: real("192.0.2.7", port, type=socket.SOCK_STREAM),
     )
     # A None module makes any import of yt_dlp fail, so reaching it would show up as an error
     monkeypatch.setitem(sys.modules, "yt_dlp", None)
     _, out, _ = _read(capsys, "http://intranet.test/clip.mp4")
     [row] = out["results"]
-    assert "10.0.0.7 isn't a public address" in row["error"]
+    assert "192.0.2.7 isn't a public address" in row["error"]
 
 
 def test_a_failure_inside_a_command_still_prints_the_envelope(tmp_path, monkeypatch, capsys):
@@ -269,9 +269,14 @@ def test_frames_over_the_cap_are_reported(clip, monkeypatch, capsys):
     _, out, frames = _read(capsys, str(clip), "--fps", "2", "--keep-duplicates", "--frames", "4")
     assert len(frames) == 4
     assert any("kept 4 of " in w and "raise --frames" in w for w in out["warnings"])
+    row = next(r for r in out["results"] if r["kind"] == "media")
+    gaps = [u for u in row["coverage"]["unread"] if u["reason"].startswith("kept 4 of ")]
+    assert len(gaps) == 1 and not out["complete"]
     # The cached listing still knows how many there were
     _, out, _ = _read(capsys, str(clip), "--fps", "2", "--keep-duplicates", "--frames", "4")
     assert any("kept 4 of " in w for w in out["warnings"])
+    row = next(r for r in out["results"] if r["kind"] == "media")
+    assert gaps == [u for u in row["coverage"]["unread"] if u["reason"].startswith("kept 4 of ")]
 
 
 @needs_ffmpeg

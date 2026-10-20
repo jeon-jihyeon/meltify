@@ -80,6 +80,7 @@ class Reader:
         names: dict[Path, str],
         *,
         shallow: bool = False,
+        include_content: bool = False,
         defer: bool = False,
         fetch_opts: dict[str, Any] | None = None,
         whole: bool = False,
@@ -91,6 +92,7 @@ class Reader:
         # Folded the way unique_name compares them
         self.taken = {n.casefold() for n in names.values()}
         self.shallow = shallow
+        self.include_content = include_content
         # Hold every item's markdown until recognition, so a run that fails there writes none
         self.defer = defer
         self.fetch_opts = fetch_opts or {}
@@ -178,7 +180,7 @@ class Reader:
     def one(
         self, path: Path, src: Src, name: str | None = None, depth: int = 0
     ) -> list[dict[str, Any]]:
-        row = finding(src, kind=None, chars=0, needs=[], hidden=0, out=None)
+        row = self._row(src)
         try:
             converted = self._melt(path, src, row)
         except passwords.Locked as e:
@@ -191,6 +193,21 @@ class Reader:
             # One unreadable file shouldn't stop the rest of the folder
             return [{**row, "error": error_note(e, ITEM_NOTE)}]
         return self.keep(converted, name or self.names[path], depth, row, src.cite())
+
+    def _row(self, src: Src, kind: str | None = None) -> dict[str, Any]:
+        row = finding(
+            src,
+            kind=kind,
+            chars=0,
+            needs=[],
+            hidden=0,
+            out=None,
+            artifacts=[],
+            coverage={"unread": []},
+        )
+        if self.include_content:
+            row["content"] = []
+        return row
 
     def keep(
         self,
@@ -205,6 +222,7 @@ class Reader:
             # Embedded pictures are only counted, so their bytes aren't held until the run
             # ends. They're listed the way a deep read without engines lists them
             pictures = [j for j in converted.jobs if j.src.img is not None]
+            row["coverage"]["unread"] += [finding(j.src, reason="shallow") for j in pictures]
             converted.jobs = [j for j in converted.jobs if j.src.img is None]
             converted.needs = job_needs(pictures) + converted.needs
         converted.jobs = [self._spilled(j) for j in converted.jobs]
@@ -222,6 +240,9 @@ class Reader:
             hidden=converted.hidden,
             out=str(target),
         )
+        row["artifacts"].append(
+            {"src": row["src"], "cite": row["cite"], "path": str(target), "role": "markdown"}
+        )
         if converted.jobs or self.defer:
             with self.out_lock:
                 self.outputs.append(Output(converted, target, origin, row))
@@ -229,6 +250,8 @@ class Reader:
             # Nothing waits on recognition, so write it now instead of holding its text until
             # the last file is read
             row["chars"] = converted.chars
+            if self.include_content:
+                row["content"] = [finding(b.src, text=b.text) for b in converted.blocks]
             self._prune_pictures(name, set())
             target.parent.mkdir(parents=True, exist_ok=True)
             converted.write(target, origin)
@@ -259,6 +282,7 @@ class Reader:
             else:
                 saved.write_bytes(child.data or b"")
             child_src = child.parent.inside(member)
+            row["artifacts"].append(finding(child_src, path=str(saved), role="attachment"))
             with self.name_lock:
                 child_out = unique_name(
                     flat_name(Path(f"{name}__{member.replace('/', '__')}")),
@@ -336,7 +360,7 @@ class Reader:
 
     def url(self, url: str) -> list[dict[str, Any]]:
         src = Src(url)
-        row = finding(src, kind="url", chars=0, needs=[], hidden=0, out=None)
+        row = self._row(src, "url")
         try:
             fetch = importlib.import_module("meltify.fetch")
             web = importlib.import_module("meltify.converters.web")
@@ -409,7 +433,11 @@ class Reader:
             n += len(mine)
             if got is None:
                 left = job_needs(mine)
+                o.row["coverage"]["unread"] += [finding(j.src, reason="engine") for j in mine]
             else:
+                o.row["coverage"]["unread"] += [
+                    finding(j.src, reason=g.left) for j, g in zip(mine, got, strict=True) if g.left
+                ]
                 left = [
                     need + suffix
                     for reason, suffix in LEFT.items()
@@ -419,6 +447,7 @@ class Reader:
                 ]
                 o.converted.blocks = place(o.converted.blocks, [b for g in got for b in g.blocks])
                 for g in got:
+                    o.row["coverage"]["unread"] += g.unread
                     details += [
                         {**d, "chars": 0, "needs": [], "out": str(o.target)} for d in g.disputed
                     ]
@@ -431,6 +460,13 @@ class Reader:
             o.converted.needs = left + o.converted.needs
             o.row["needs"] = left + o.row["needs"]
             o.row["chars"] = o.converted.chars
+            if self.include_content:
+                o.row["content"] = [finding(b.src, text=b.text) for b in o.converted.blocks]
+            o.row["artifacts"] += [
+                finding(j.src, path=str(self.out_dir / link), role="picture")
+                for j, link in zip(mine, links, strict=True)
+                if link
+            ]
             # After chars, since a link points at a picture and isn't text read from the item
             _link_pictures(o.converted, mine, links)
             self._prune_pictures(o.target.stem, {Path(link).name for link in links if link})
