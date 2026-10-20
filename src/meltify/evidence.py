@@ -114,6 +114,7 @@ class Envelope:
     summary: str = ""
     # Table columns for commands that show different rows per action
     columns: list[str] | None = None
+    complete: bool | None = None
 
     @property
     def ok(self) -> bool:
@@ -150,4 +151,5 @@ class Envelope:
             "artifacts": self.artifacts,
             "warnings": self.warnings,
             "errors": self.errors,
+            **({"complete": self.complete and self.ok} if self.complete is not None else {}),
         }

@@ -288,7 +288,7 @@ def test_pictures_are_saved_small_and_linked_without_counting_as_text(
     from PIL import Image
 
     docx = embedded_docx(tmp_path / "pics.docx", card("CHART 42", (4032, 3024)))
-    code, out = _rows(tmp_path, monkeypatch, capsys, docx)
+    code, out = _rows(tmp_path, monkeypatch, capsys, docx, "--content")
     row = out["results"][0]
     md = Path(row["out"]).read_text()
     link = next(line for line in md.splitlines() if line.startswith("![picture]("))
@@ -297,6 +297,11 @@ def test_pictures_are_saved_small_and_linked_without_counting_as_text(
         assert im.format == "WEBP"
         assert max(im.size) <= 1568 and im.size[0] * im.size[1] <= 1_150_000
     assert "pics.docx#para3#img1" in md.split(link)[0].splitlines()[-1]
+    assert all("![picture]" not in block["text"] for block in row["content"])
+    [artifact] = [a for a in row["artifacts"] if a["role"] == "picture"]
+    assert Path(artifact["path"]) == picture
+    assert artifact["src"]["img"] == 1
+    assert not out["complete"] and out["ok"]
 
     code, out = _rows(tmp_path, monkeypatch, capsys, docx, "--no-pictures")
     assert out["results"][0]["chars"] == row["chars"]

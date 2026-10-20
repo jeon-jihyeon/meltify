@@ -12,12 +12,19 @@ in any release
 - `inputs`, `artifacts` and `summary`: the paths given, files written such as
   `index.jsonl`, and the closing line
 - `ok` is true when `errors` is empty, and `exit_code` is what the command would exit with
+- `complete` is false for an item error or known unread content within the requested scope
 
 A `read` row holds `src` and `cite` for where the item came from, `kind`, `out` for the
 markdown path, `chars`, `needs` for what's still unread and `hidden` for invisible PDF
 spans. A failed item adds `error` and `hint`, an item a fallback read in place of a missing
 extra adds just the `hint` for installing it, and a URL adds `final_url`, `fetched_at`,
 `sha256` and `etag`
+
+Item rows also expose cited `artifacts` and `coverage` with status, requested scope and
+known unread locations. With `content=True`, ordered `content` blocks carry `text`, `src`
+and `cite`; otherwise the field is absent. These are plain values, not internal converter
+objects. Complete coverage doesn't promise recognition accuracy or exhaustive hidden-content
+detection
 
 Rows of kind `disputed`, `hidden`, `contrast` and `frame` point at a place inside an item
 instead: an OCR value the engines dispute, a hidden PDF span with its `text` and `reasons`,

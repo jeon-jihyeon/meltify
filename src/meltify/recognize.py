@@ -133,6 +133,7 @@ class Outcome:
     unchecked: int = 0
     # Why the job is still pending: "budget", "engine" or "failed"
     left: str | None = None
+    unread: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,7 @@ class Footage:
     speech: list[Segment] | None  # None when no speech engine could listen
     scenes: list[float]
     frames: list[Frame]
+    total: int
 
 
 class Cache:
@@ -664,7 +666,7 @@ class Recognizer:
                 not look or all(f.picture is not None for f in frames)
             ):
                 self._capped(where, len(frames), listed["total"])
-                return Footage(speech, listed["scenes"], frames)
+                return Footage(speech, listed["scenes"], frames, listed["total"])
         if not compute:
             return None
         scenes, shots, total = self._shots(path)
@@ -684,7 +686,7 @@ class Recognizer:
                     True,
                 )
             frames.append(Frame(sh, pic))
-        return Footage(speech, scenes, frames)
+        return Footage(speech, scenes, frames, total)
 
     def _capped(self, where: str, kept: int, total: int) -> None:
         if 0 < kept < total:
@@ -803,6 +805,8 @@ class Recognizer:
 
     def _footage_outcome(self, src: Src, got: Footage) -> Outcome:
         out = self._speech_outcome(src, got.speech or [])
+        if self.opts.frames > 0 and len(got.frames) < got.total:
+            out.unread.append(finding(src, reason=f"kept {len(got.frames)} of {got.total} frames"))
         if got.speech is None:
             out.left = "engine"
         if got.scenes:
@@ -817,8 +821,11 @@ class Recognizer:
                 finding(at, kind="frame", reasons=list(f.shot.reasons), file=str(f.shot.file))
             )
             if f.picture is None:
+                out.unread.append(finding(at, reason="engine"))
                 continue
             shown = self._picture_outcome(at, f.picture, _placer(at, "px", (0, 0, 1, 1)))
+            if shown.left:
+                out.unread.append(finding(at, reason=shown.left))
             out.blocks += shown.blocks
             out.disputed += shown.disputed
             out.unchecked += shown.unchecked

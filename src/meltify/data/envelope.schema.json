@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "meltify/v1 envelope",
+  "type": "object",
+  "required": [
+    "schema",
+    "command",
+    "version",
+    "ok",
+    "summary",
+    "inputs",
+    "results",
+    "artifacts",
+    "warnings",
+    "errors"
+  ],
+  "properties": {
+    "schema": {
+      "const": "meltify/v1"
+    },
+    "command": {
+      "enum": [
+        "read",
+        "doctor"
+      ]
+    },
+    "version": {
+      "type": "string"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "role"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "enum": [
+              "missing",
+              "usage",
+              "failed"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "read"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "complete"
+        ],
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/$defs/readRow"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "page": {
+          "type": "integer"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "section": {
+          "type": "integer"
+        },
+        "slide": {
+          "type": "integer"
+        },
+        "frame": {
+          "type": "integer"
+        },
+        "para": {
+          "type": "integer"
+        },
+        "img": {
+          "type": "integer"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "sheet": {
+          "type": "string"
+        },
+        "cell": {
+          "type": "string"
+        },
+        "anchor": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "t": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "cited": {
+      "type": "object",
+      "required": [
+        "src",
+        "cite"
+      ],
+      "properties": {
+        "src": {
+          "$ref": "#/$defs/source"
+        },
+        "cite": {
+          "type": "string"
+        }
+      }
+    },
+    "readRow": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/cited"
+        }
+      ],
+      "required": [
+        "kind",
+        "chars",
+        "needs",
+        "out"
+      ],
+      "properties": {
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "out": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "disputed",
+              "hidden",
+              "contrast",
+              "frame"
+            ]
+          }
+        }
+      },
+      "else": {
+          "required": [
+            "artifacts",
+          "coverage"
+        ],
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cited"
+                }
+              ],
+              "required": [
+                "text"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/cited"
+                }
+              ],
+              "required": [
+                "path",
+                "role"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "role": {
+                  "enum": [
+                    "markdown",
+                    "attachment",
+                    "picture",
+                    "frame",
+                    "contrast"
+                  ]
+                }
+              }
+            }
+          },
+          "coverage": {
+            "type": "object",
+            "required": [
+              "status",
+              "scope",
+              "unread"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "failed"
+                ]
+              },
+              "scope": {
+                "type": "object",
+                "required": [
+                  "pages",
+                  "start",
+                  "end",
+                  "shallow",
+                  "subs_only",
+                  "frames",
+                  "scene",
+                  "fps"
+                ],
+                "properties": {
+                  "pages": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "start": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "end": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "shallow": {
+                    "type": "boolean"
+                  },
+                  "subs_only": {
+                    "type": "boolean"
+                  },
+                  "frames": {
+                    "type": "integer"
+                  },
+                  "scene": {
+                    "type": "number"
+                  },
+                  "fps": {
+                    "type": "number"
+                  }
+                }
+              },
+              "unread": {
+                "type": "array",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/cited"
+                    }
+                  ],
+                  "required": [
+                    "reason"
+                  ],
+                  "properties": {
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

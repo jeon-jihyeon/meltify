@@ -25,6 +25,7 @@ Only the names exported from `meltify` are public. Every other module is interna
 | Field | Holds |
 |---|---|
 | `ok` | `false` when `errors` isn't empty |
+| `complete` | read only: no command or item error and no known unread content within the requested scope. `ok` alone doesn't mean a complete read |
 | `results` | one row per item, keyed as below |
 | `errors` | what stopped the run, each with `code` (`usage`, `missing` or `failed`), `message` and sometimes `hint` |
 | `warnings` | what didn't stop it, like an item that failed or an engine that's missing |
@@ -46,8 +47,17 @@ A `read` row has these keys:
 | `needs` | what's still unread and why, like `hidden sheets Old`, `ocr (budget)`, a password or a missing extra |
 | `hidden` | how many PDF spans or SVG texts a reader can't see. `--hidden` lists the PDF ones and why |
 | `error`, `hint` | on a failed item, what went wrong and what to try. An item a fallback read in place of a missing extra carries only the `hint` |
+| `content` | only with `--content` or Python `content=True`: ordered `{text, src, cite}` body blocks before picture links are added to markdown, including page, cell and attachment provenance in `src` |
+| `artifacts` | `{path, role, src, cite}` references for markdown, attachment inputs, pictures, frames and contrast renders. Paths follow the same convention as `out` |
+| `coverage` | `{status, scope, unread}`: `complete`, `partial` or `failed`; requested pages, time bounds, shallow or subtitle-only switches, and effective `frames`, `scene`, `fps`; known unread `{reason, src, cite}` locations |
 
 URL rows add `final_url`, `fetched_at`, `sha256` and `etag`.
+
+`artifacts` and `coverage` belong to item rows. `content` is absent by default, so a folder read doesn't retain every item's body or duplicate it in the index. Opt in when you need structured body text; an empty array then means no body text was read. Detail rows keep the smaller form below. Content text keeps the converter's own formatting, such as numbered text lines and Markdown tables. A completed blank scan can have `needs: ["no text found"]` and still be complete. Other needs conservatively mark known gaps. A converter that only knows an item-level gap cites the item instead of inventing a page range. Complete covers the requested pages or time window, not unselected content, recognition accuracy or exhaustive hidden-content detection.
+
+The packaged `meltify/data/envelope.schema.json` describes this additive `meltify/v1` contract. Allow unknown fields when consuming it. The same content and coverage appear in the Python envelope, CLI JSON and `index.jsonl`.
+
+A video frame without OCR or whose OCR failed stays unread at its timestamp. A positive frame cap that samples the video records the kept and total counts at the video cite. `frames=0` explicitly excludes frames. Time bounds and video settings must be finite numbers.
 
 Some rows point at a place inside an item instead of the item itself. They carry the item's markdown in `out`, and `kind` says what they are:
 

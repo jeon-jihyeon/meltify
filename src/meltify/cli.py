@@ -104,6 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = config.load(overrides, project=args.config)
     except config.ConfigError as e:
         env = Envelope(command=module.NAME, version=__version__)
+        env.complete = False if module.NAME == "read" else None
         env.error(USAGE, f"config: {e}")
         emit(env, as_json=args.json, columns=module.COLUMNS, limit=args.limit)
         return env.exit_code
@@ -112,6 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         env = module.run(args, settings)
     except Exception as e:  # noqa: BLE001
         env = Envelope(command=module.NAME, version=__version__)
+        env.complete = False if module.NAME == "read" else None
         env.error(*_failure(e))
     env.warnings[:0] = settings["_warnings"]
     emit(env, as_json=args.json, columns=env.columns or module.COLUMNS, limit=args.limit)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import math
 import re
 import shutil
 import time
@@ -46,6 +47,7 @@ def add_arguments(p: argparse.ArgumentParser) -> dict[str, argparse.Action]:
         actions[action.dest] = action
 
     add(p, "paths", nargs="+", help="files, folders or http(s) URLs")
+    add(p, "--content", action="store_true", help="include cited body blocks in results and index")
     add(
         p,
         "--jobs",
@@ -204,8 +206,8 @@ ORIGIN_URL = re.compile(r" url=(\S+)$")
 
 def _positive(raw: str) -> float:
     n = float(raw)
-    if not n > 0:
-        raise argparse.ArgumentTypeError(f"must be above 0, got {raw}")
+    if not 0 < n < math.inf:
+        raise argparse.ArgumentTypeError(f"must be above 0 and finite, got {raw}")
     return n
 
 
@@ -282,6 +284,21 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
     from meltify.ffmpeg import Window
 
     env = Envelope(command=NAME, version=__version__)
+    scope = {
+        "pages": args.pages.spec if args.pages else None,
+        "start": args.start,
+        "end": args.end,
+        "shallow": args.shallow,
+        "subs_only": args.subs_only,
+        "frames": int(pick(args.frames, settings["read"]["frames"])),
+        "scene": float(pick(args.scene, settings["media"]["scene"])),
+        "fps": float(pick(args.fps, settings["media"]["fps"])),
+    }
+    if any(
+        scope[k] is not None and not math.isfinite(scope[k])
+        for k in ("start", "end", "scene", "fps")
+    ):
+        raise ValueError("video frame settings and time bounds must be finite")
     out_dir = Path(settings["out_dir"]) / "read"
     urls = [p for p in args.paths if is_url(p)]
     local = [Path(p) for p in args.paths if not is_url(p)]
@@ -327,6 +344,10 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
     finally:
         temps.remove()
     rows.sort(key=lambda r: r["cite"])
+    _coverage(rows, scope)
+    env.complete = all(
+        r["coverage"]["status"] == "complete" for r in rows if r["kind"] not in DETAIL
+    )
     _write_index(env, out_dir / "index.jsonl", rows)
     _summarize(env, out_dir, rows, recognizer, started, reader.unchecked)
     if args.hidden:
@@ -358,6 +379,7 @@ def _reader(
         out_dir,
         names,
         shallow=args.shallow,
+        include_content=args.content,
         fetch_opts={
             "max_bytes": int(pick(args.max_bytes, settings["read"]["max_bytes"])),
             "allow_private": args.allow_private,
@@ -446,6 +468,34 @@ def _reading(item: str) -> Reading:
         raise ValueError(f"--reading expects NAME=FILE, got {item!r}")
     lines = Path(file).read_text("utf-8").splitlines()
     return Reading(name, [x for x in lines if x.strip()])
+
+
+def _coverage(rows: list[dict[str, Any]], scope: dict[str, Any]) -> None:
+    items = {r["out"]: r for r in rows if r["kind"] not in DETAIL and r.get("out")}
+    for row in rows:
+        if row["kind"] in DETAIL:
+            if row.get("path") and row.get("out") in items:
+                items[row["out"]]["artifacts"].append(
+                    {
+                        "path": row["path"],
+                        "role": row["kind"],
+                        "src": row["src"],
+                        "cite": row["cite"],
+                    }
+                )
+            continue
+        unread = row["coverage"]["unread"]
+        unread += [
+            {"src": row["src"], "cite": row["cite"], "reason": need}
+            for need in row["needs"]
+            if need != "no text found"
+        ]
+        if row.get("error"):
+            unread.append({"src": row["src"], "cite": row["cite"], "reason": row["error"]})
+        row["coverage"].update(
+            status="failed" if row.get("error") else "partial" if unread else "complete",
+            scope=dict(scope),
+        )
 
 
 def _write_index(env: Envelope, index: Path, rows: list[dict[str, Any]]) -> None:
