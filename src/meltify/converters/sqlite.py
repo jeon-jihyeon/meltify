@@ -34,7 +34,7 @@ def _table(db: sqlite3.Connection, name: str, src: Src) -> Block:
         values = row[1:] if keyed else row
         lines.append(f"{label}| " + " | ".join(sample_cell(v) for v in values))
     first = f"rowid={rows[0][0]}" if keyed and rows else None
-    return Block(replace(src, sheet=name, cell=first), "\n".join(lines))
+    return Block(replace(src, sheet=name, cell=first), "\n".join(lines), role="sample")
 
 
 def convert(path: Path, src: Src) -> Converted:
@@ -55,7 +55,9 @@ def convert(path: Path, src: Src) -> Converted:
         except sqlite3.DatabaseError as e:
             out.needs.append(f"unreadable database: {e}")
             return out
-        out.blocks.append(Block(src, "\n".join(f"{sql};" for _, _, sql in schema) or "(empty)"))
+        out.blocks.append(
+            Block(src, "\n".join(f"{sql};" for _, _, sql in schema) or "(empty)", role="metadata")
+        )
         for kind, name, _ in schema:
             if kind != "table" or name.startswith("sqlite_"):
                 continue

@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,17 +83,23 @@ class Remote:
             return self.endpoint.missing()
         return None if os.environ.get(self.key_env) else f"export {self.key_env}=..."
 
+    @property
+    def prompt(self) -> str:
+        return self.endpoint.prompt if self.endpoint is not None else llm.TRANSCRIBE
+
     def recognize(self, image: Path, size: tuple[int, int]) -> list[TextBox]:
         if (ep := self.endpoint) is not None:
             text = llm.openai_vision(
-                image, ep.model, ep.api_key, ep.base_url, ep.prompt, ep.timeout
+                image, ep.model, ep.api_key, ep.base_url, self.prompt, ep.timeout
             )
         elif self.name == "claude":
-            text = llm.anthropic_vision(image, self.model, llm.key(self.key_env))
+            text = llm.anthropic_vision(image, self.model, llm.key(self.key_env), self.prompt)
         elif self.name == "gemini":
-            text = llm.gemini_vision(image, self.model, llm.key(self.key_env))
+            text = llm.gemini_vision(image, self.model, llm.key(self.key_env), self.prompt)
         else:
-            text = llm.openai_vision(image, self.model, llm.key(self.key_env), self.base_url)
+            text = llm.openai_vision(
+                image, self.model, llm.key(self.key_env), self.base_url, self.prompt
+            )
         return [TextBox(line.strip()) for line in text.splitlines() if line.strip()]
 
 
@@ -170,8 +175,21 @@ def ready(spec: str, settings: Mapping[str, Any]) -> list[Engine]:
     return chosen
 
 
-def _overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
-    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+def _seam(above: list[str], lines: list[str]) -> tuple[int, int]:
+    """Where `lines` repeat the run of lines the tile above ended with, as a slice
+
+    A line cut by either tile's edge can read differently in each, so one line on each side
+    may sit outside the run. No run gives an empty slice
+    """
+    start, end = 0, 0
+    for cut in (0, 1):
+        tail = above[: len(above) - cut]
+        for skip in (0, 1):
+            for n in range(min(len(tail), len(lines) - skip), end - start, -1):
+                if tail[len(tail) - n :] == lines[skip : skip + n]:
+                    start, end = skip, skip + n
+                    break
+    return start, end
 
 
 def read_tiles(e: Engine, prepared: Any, tile_max: int, folder: Path) -> list[TextBox]:
@@ -179,22 +197,18 @@ def read_tiles(e: Engine, prepared: Any, tile_max: int, folder: Path) -> list[Te
     from meltify import imaging
 
     boxes = []
-    seen: list[tuple[tuple[int, int, int, int], Counter[str]]] = []
+    # The last lines read in each column of tiles, by the column's x offset
+    above: dict[int, list[str]] = {}
     # Vision APIs shrink large images, so keep each tile under their limit
     for i, tile in enumerate(imaging.tiles(prepared, tile_max)):
         tile_path = imaging.save(tile.image, folder / f"tile{i}.png")
         rect = (tile.x, tile.y, tile.x + tile.image.width, tile.y + tile.image.height)
         lines = [b.text for b in e.recognize(tile_path, tile.image.size)]
-        # Remote lines carry no position, so a line in the overlap comes back from both tiles.
-        # Drop one copy for each line an overlapping tile already read
-        before: Counter[str] = Counter()
-        for r, c in seen:
-            if _overlap(r, rect):
-                before |= c
-        seen.append((rect, Counter(lines)))
-        for text in lines:
-            if before[text]:
-                before[text] -= 1
-                continue
-            boxes.append(TextBox(text, rect))
+        # Remote lines carry no position, so only the run where this tile starts the way the
+        # tile above ended is one strip read twice. The same line elsewhere is another line,
+        # like a price listed twice. Side-by-side tiles split their shared strip mid-line, so
+        # nothing is dropped there
+        start, end = _seam(above.get(tile.x, []), lines)
+        above[tile.x] = lines
+        boxes += [TextBox(text, rect) for text in lines[:start] + lines[end:]]
     return boxes

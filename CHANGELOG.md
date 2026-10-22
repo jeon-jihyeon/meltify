@@ -8,11 +8,16 @@ All notable changes to meltify. Versions follow [semantic versioning](https://se
 
 - Read results expose artifact references and known unread locations. `--content` or Python `content=True` includes cited body blocks without parsing Markdown; default results and index don't duplicate body text. `complete` distinguishes read coverage from execution success in `ok`. Video frame gaps keep their timestamps, and capped samples retain their kept and total counts
 - A packaged JSON Schema describes the additive `meltify/v1` envelope for CLI and Python consumers
+- Cited content distinguishes metadata, computed summaries and samples from body text through an optional `role` field
 
 ### Fixed
 
 - Quick Look identifies newly created files through Launch Services without waiting for Spotlight to index them
 - Non-finite video settings and time bounds are refused before output is written
+- A speech engine error, like an HTTP 500 or a read timeout, leaves the recording as `media (failed)` with partial coverage instead of an empty transcript, and a rerun asks again. A video still gets its scenes and frames
+- A remote OCR line repeated on two tiles is dropped only where a tile starts the way the tile above ended, so the same line elsewhere in a long receipt stays
+- Remote OCR readings are cached per `ocr.tile_max` and per the built-in prompt, so changing either reads again
+- A Data Package descriptor object shows its `complete` and `error` keys first, so cutting a long query never hides whether the producer's run finished
 
 ## 0.5.0
 

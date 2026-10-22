@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from meltify.evidence import Src
+from meltify.evidence import Src, finding
 from meltify.files import RAR_MAGIC, SEVEN_ZIP_MAGIC
 
 TEXT = {
@@ -82,6 +82,12 @@ SOURCE_MARK = "<!-- meltify source: "
 class Block:
     src: Src
     text: str
+    role: Literal["body", "metadata", "summary", "sample"] = "body"
+
+    def content(self) -> dict[str, Any]:
+        return finding(
+            self.src, text=self.text, **({"role": self.role} if self.role != "body" else {})
+        )
 
 
 @dataclass(frozen=True)

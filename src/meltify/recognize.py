@@ -161,10 +161,16 @@ class Frame:
 
 @dataclass(frozen=True)
 class Footage:
-    speech: list[Segment] | None  # None when no speech engine could listen
+    speech: list[Segment]
     scenes: list[float]
     frames: list[Frame]
     total: int
+    # Why the soundtrack wasn't transcribed: "engine" or "failed"
+    unheard: str | None = None
+
+
+class SpeechFailed(Exception):
+    """A speech engine answered with an error, already warned about and never cached"""
 
 
 class Cache:
@@ -209,7 +215,10 @@ def _identity(engine: Any) -> str:
 
     if not isinstance(engine, Remote | Api):
         return engine.name
-    prompt = engine.endpoint.prompt if engine.endpoint is not None else ""
+    if isinstance(engine, Remote):
+        prompt = engine.prompt
+    else:
+        prompt = engine.endpoint.prompt if engine.endpoint is not None else ""
     parts = "\n".join([engine.model, engine.base_url, prompt])
     return f"{engine.name}-{hashlib.sha256(parts.encode()).hexdigest()[:12]}"
 
@@ -450,19 +459,21 @@ class Recognizer:
         except MissingTool as e:
             if e.name not in NO_ENGINE:
                 self.warn(f"{e.name} not available for {where}: {e.hint}")
-            for i in members:
-                outcomes[i].left = "engine"
-            return True
+            left = "engine"
+        except SpeechFailed:
+            left = "failed"
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             # ffmpeg may refuse a file ffprobe opened, and that must not end the whole run
             self.warn(f"can't read {where}: {e}"[:ITEM_NOTE])
+            left = "failed"
+        else:
+            if got is None:
+                return False
             for i in members:
-                outcomes[i].left = "failed"
+                outcomes[i] = self._outcome(jobs[i], got)
             return True
-        if got is None:
-            return False
         for i in members:
-            outcomes[i] = self._outcome(jobs[i], got)
+            outcomes[i].left = left
         return True
 
     # Pictures
@@ -484,15 +495,18 @@ class Recognizer:
                 im.seek(job.src.frame - 1)
             return imaging.flatten(im)
 
-    def _prep(self, page: bool) -> str:
+    def _prep(self, page: bool, engine: Any) -> str:
         from meltify import imaging
+        from meltify.engines.ocr import Remote
 
         tone = ("s" if self.opts.sharpen else "") + ("e" if self.opts.equalize else "")
+        # Tiles decide which lines a remote engine sees whole, so another size reads anew
+        tiles = f"-t{self.opts.tile_max}" if isinstance(engine, Remote) else ""
         if page:
-            return f"dpi{self.opts.dpi}{tone}"
+            return f"dpi{self.opts.dpi}{tone}{tiles}"
         if self.opts.upscale is not None:
-            return f"x{self.opts.upscale:g}{tone}"
-        return f"auto{imaging.SHORT_TARGET}-{imaging.LONG_MAX}{tone}"
+            return f"x{self.opts.upscale:g}{tone}{tiles}"
+        return f"auto{imaging.SHORT_TARGET}-{imaging.LONG_MAX}{tone}{tiles}"
 
     def picture(
         self,
@@ -510,12 +524,13 @@ class Recognizer:
         chosen = [e for e in self.ocr_engines() if e.name not in self._down]
         if not chosen and not given:
             raise MissingTool("ocr engine", f"{engines.INSTALL_HINT}, or --engines NAME")
-        lang, prep = self.opts.lang, self._prep(kind == "page")
+        lang = self.opts.lang
+        prep = {e.name: self._prep(kind == "page", e) for e in chosen}
         size: tuple[int, int] | None = None
         readings: dict[str, EngineReading] = {}
         missing = []
         for e in chosen:
-            hit = self.cache.get("ocr", sha, _identity(e), lang, prep)
+            hit = self.cache.get("ocr", sha, _identity(e), lang, prep[e.name])
             if hit is None:
                 missing.append(e)
                 continue
@@ -562,7 +577,7 @@ class Recognizer:
                     sha,
                     _identity(e),
                     lang,
-                    prep,
+                    prep[e.name],
                 )
                 readings[e.name] = EngineReading(e.name, e.kind, boxes)
         found = [readings[e.name] for e in chosen if e.name in readings]
@@ -614,8 +629,9 @@ class Recognizer:
                 self._drop(engine.name, err)
                 return self.speech(sha, path, where, compute)
             if not got.ok:
+                # An empty list would pass for a silent recording, and a rerun should ask again
                 self.warn(f"{engine.name} failed on {where}: {got.error}")
-                return []
+                raise SpeechFailed
             # Cut audio starts at zero, so the window start puts times back on the recording
             segments = [
                 Segment(s.start + window.offset(), s.end + window.offset(), s.text)
@@ -628,19 +644,23 @@ class Recognizer:
         self, sha: str, path: Path | None, where: str, listen: bool, compute: bool
     ) -> Footage | None:
         assert path is not None
-        speech: list[Segment] | None = []
+        speech: list[Segment] = []
+        unheard = None
         if listen and self.asr_engine() is None:
             # Scenes still help without a transcript
-            speech = None
+            unheard = "engine"
         elif listen:
             try:
-                if (speech := self.speech(sha, path, where, compute)) is None:
+                if (heard := self.speech(sha, path, where, compute)) is None:
                     return None
+                speech = heard
             except MissingTool as e:
                 # The speech server went down mid-run, and scenes still help
                 if e.name not in NO_ENGINE:
                     raise
-                speech = None
+                unheard = "engine"
+            except SpeechFailed:
+                unheard = "failed"
         look = self.opts.frames > 0 and bool(self.ocr_engines())
         o = self.opts
         key = (
@@ -666,7 +686,7 @@ class Recognizer:
                 not look or all(f.picture is not None for f in frames)
             ):
                 self._capped(where, len(frames), listed["total"])
-                return Footage(speech, listed["scenes"], frames, listed["total"])
+                return Footage(speech, listed["scenes"], frames, listed["total"], unheard)
         if not compute:
             return None
         scenes, shots, total = self._shots(path)
@@ -686,7 +706,7 @@ class Recognizer:
                     True,
                 )
             frames.append(Frame(sh, pic))
-        return Footage(speech, scenes, frames, total)
+        return Footage(speech, scenes, frames, total, unheard)
 
     def _capped(self, where: str, kept: int, total: int) -> None:
         if 0 < kept < total:
@@ -804,11 +824,10 @@ class Recognizer:
         return Outcome([Block(src, "\n".join([f"> transcribed by {engine}", *lines]))])
 
     def _footage_outcome(self, src: Src, got: Footage) -> Outcome:
-        out = self._speech_outcome(src, got.speech or [])
+        out = self._speech_outcome(src, got.speech)
+        out.left = got.unheard
         if self.opts.frames > 0 and len(got.frames) < got.total:
             out.unread.append(finding(src, reason=f"kept {len(got.frames)} of {got.total} frames"))
-        if got.speech is None:
-            out.left = "engine"
         if got.scenes:
             line = "scenes: " + ", ".join(clock(t) for t in got.scenes)
             if out.blocks:

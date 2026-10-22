@@ -174,14 +174,86 @@ class FakeRemote(engines.Remote):
         super().__init__("gemini", "m", "FAKE_KEY")
         self.lines = lines
         self.fail = fail
+        self.calls = 0
 
     def missing(self):
         return None
 
     def recognize(self, image, size):
+        self.calls += 1
         if self.fail is not None:
             raise self.fail
         return [TextBox(t) for t in self.lines]
+
+
+class TileLines(engines.Remote):
+    """Read one fixed list of lines per tile, in tile order"""
+
+    def __init__(self, per_tile: list[list[str]]) -> None:
+        super().__init__("gemini", "m", "FAKE_KEY")
+        self.per_tile = iter(per_tile)
+
+    def recognize(self, image, size):
+        return [TextBox(t) for t in next(self.per_tile)]
+
+
+@pytest.mark.parametrize(
+    ("size", "per_tile", "want"),
+    [
+        pytest.param(
+            (100, 190),
+            [["latte 4,500", "bagel 3,000", "tea 2,000"], ["tea 2,000", "latte 4,500", "sum 9"]],
+            ["latte 4,500", "bagel 3,000", "tea 2,000", "latte 4,500", "sum 9"],
+            id="the same line away from the seam stays",
+        ),
+        pytest.param(
+            (100, 190),
+            [["top 1", "mid 2", "cut"], ["cu", "mid 2", "edge 3"]],
+            ["top 1", "mid 2", "cut", "cu", "edge 3"],
+            id="a line cut by either edge sits outside the run",
+        ),
+        pytest.param(
+            (100, 190),
+            [["a 1", "b 2"], ["c 3", "d 4"]],
+            ["a 1", "b 2", "c 3", "d 4"],
+            id="no shared run drops nothing",
+        ),
+        pytest.param(
+            (190, 100),
+            [["a 1", "b 2"], ["b 2", "c 3"]],
+            ["a 1", "b 2", "b 2", "c 3"],
+            id="side by side tiles keep every line",
+        ),
+        pytest.param((100, 190), [[], ["line 1"]], ["line 1"], id="an empty upper tile"),
+        pytest.param((100, 190), [["line 1"], []], ["line 1"], id="an empty lower tile"),
+        pytest.param(
+            (190, 190),
+            [
+                ["left 1", "edge 1"],
+                ["right 1", "edge 2"],
+                ["edge 1", "left 2"],
+                ["edge 2", "right 2"],
+            ],
+            ["left 1", "edge 1", "right 1", "edge 2", "left 2", "right 2"],
+            id="each column follows its own upper tile",
+        ),
+    ],
+)
+def test_read_tiles_drops_only_the_strip_read_twice(tmp_path, size, per_tile, want):
+    got = engines.read_tiles(TileLines(per_tile), Image.new("RGB", size), 100, tmp_path)
+    assert [b.text for b in got] == want
+
+
+def test_a_remote_reading_is_keyed_on_the_tile_size(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    remote = FakeRemote(["TOTAL 655"])
+    monkeypatch.setattr(engines, "select", lambda spec, s: [Fake("vision", ["TOTAL 655"]), remote])
+    menu = str(_menu(tmp_path / "m.png"))
+    assert main(["read", menu]) == 0
+    (tmp_path / "meltify.toml").write_text("[ocr]\ntile_max = 4000\n")
+    assert main(["read", menu]) == 0
+    assert main(["read", menu]) == 0
+    assert remote.calls == 2
 
 
 def test_remote_lines_in_tile_overlap_count_once(tmp_path, monkeypatch, capsys):
@@ -200,7 +272,9 @@ def test_remote_lines_in_tile_overlap_count_once(tmp_path, monkeypatch, capsys):
     )
     original = imaging.tiles
     monkeypatch.setattr(imaging, "tiles", lambda *a, **k: tiles.extend(t := original(*a, **k)) or t)
-    assert main(["read", str(_menu(tmp_path / "m.png")), "--upscale", "10", "--json"]) == 0
+    tall = tmp_path / "tall.png"
+    Image.new("RGB", (80, 300), "white").save(tall)
+    assert main(["read", str(tall), "--upscale", "10", "--json"]) == 0
     out, disputed = _rows(capsys)
     assert len(tiles) == 3 and disputed == []
     assert "0 disputed values" in out["summary"]

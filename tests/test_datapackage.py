@@ -53,6 +53,25 @@ def test_csv_table_with_missing_values_and_types(tmp_path):
     assert out.needs == []
 
 
+def test_an_objects_run_status_survives_the_cut(tmp_path):
+    producer = {"query": "select " + "x, " * 1000, "complete": False, "error": "timeout"}
+    _, out = melt(_package(tmp_path, [], producer=producer))
+    line = out.blocks[0].text.splitlines()[1]
+    assert line.startswith('producer: {"complete": false, "error": "timeout", "query": "select x')
+    assert line.endswith("...")
+
+
+def test_content_roles_tell_previews_from_body(tmp_path):
+    (tmp_path / "t.csv").write_text("a\n1\n", "utf-8")
+    resources = [
+        {"name": "t", "path": "t.csv"},
+        {"name": "items", "data": [1, 2], "format": "json"},
+        {"name": "note", "data": {"k": 1}, "format": "json"},
+    ]
+    _, out = melt(_package(tmp_path, resources))
+    assert [b.content().get("role") for b in out.blocks] == ["metadata", "sample", "sample", None]
+
+
 def test_rows_past_the_sample_are_counted(tmp_path):
     (tmp_path / "t.tsv").write_text("a\tb\n" + "".join(f"{i}\t\n" for i in range(30)), "utf-8")
     _, out = melt(_package(tmp_path, [{"name": "t", "path": "t.tsv"}]))

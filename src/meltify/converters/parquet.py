@@ -80,9 +80,9 @@ def convert(path: Path, src: Src) -> Converted:
         total = f.metadata.num_rows
         fields = list(f.schema_arrow)
         schema = "\n".join(f"{field.name}: {field.type}" for field in fields)
-        out.blocks.append(Block(src, f"{total:,} rows\n{schema}"))
+        out.blocks.append(Block(src, f"{total:,} rows\n{schema}", role="metadata"))
         if f.metadata.num_row_groups:
-            out.blocks.append(Block(src, _profile(f.metadata)))
+            out.blocks.append(Block(src, _profile(f.metadata), role="summary"))
         limit = run.current().parquet_rows or total
         groups, cut = _groups(f.metadata, limit)
         rows = _head(f, limit, groups) if groups else []
@@ -94,7 +94,7 @@ def convert(path: Path, src: Src) -> Converted:
         ]
         for n, row in enumerate(rows, start=1):
             lines.append(f"| {n} | " + " | ".join(sample_cell(v) for v in row) + " |")
-        out.blocks.append(Block(replace(src, line=1), "\n".join(lines)))
+        out.blocks.append(Block(replace(src, line=1), "\n".join(lines), role="sample"))
     if (rest := total - len(rows)) > 0:
         shown = f"first {len(rows):,} shown, read.parquet_rows sets how many"
         out.needs.append(not_read(rest, "more row", shown))

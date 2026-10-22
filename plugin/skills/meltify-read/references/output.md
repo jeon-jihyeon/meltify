@@ -47,7 +47,7 @@ A `read` row has these keys:
 | `needs` | what's still unread and why, like `hidden sheets Old`, `ocr (budget)`, a password or a missing extra |
 | `hidden` | how many PDF spans or SVG texts a reader can't see. `--hidden` lists the PDF ones and why |
 | `error`, `hint` | on a failed item, what went wrong and what to try. An item a fallback read in place of a missing extra carries only the `hint` |
-| `content` | only with `--content` or Python `content=True`: ordered `{text, src, cite}` body blocks before picture links are added to markdown, including page, cell and attachment provenance in `src` |
+| `content` | only with `--content` or Python `content=True`: ordered `{text, src, cite}` blocks before picture links are added to markdown, including page, cell and attachment provenance in `src`; optional `role` distinguishes `metadata`, `summary` and `sample`, with absence meaning body text |
 | `artifacts` | `{path, role, src, cite}` references for markdown, attachment inputs, pictures, frames and contrast renders. Paths follow the same convention as `out` |
 | `coverage` | `{status, scope, unread}`: `complete`, `partial` or `failed`; requested pages, time bounds, shallow or subtitle-only switches, and effective `frames`, `scene`, `fps`; known unread `{reason, src, cite}` locations |
 
