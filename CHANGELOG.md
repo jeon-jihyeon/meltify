@@ -2,13 +2,14 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
-## Unreleased
+## 0.5.1
 
 ### Added
 
 - Read results expose artifact references and known unread locations. `--content` or Python `content=True` includes cited body blocks without parsing Markdown; default results and index don't duplicate body text. `complete` distinguishes read coverage from execution success in `ok`. Video frame gaps keep their timestamps, and capped samples retain their kept and total counts
 - A packaged JSON Schema describes the additive `meltify/v1` envelope for CLI and Python consumers
 - Cited content distinguishes metadata, computed summaries and samples from body text through an optional `role` field
+- An executable data consumer example checks source outcome, read coverage, sample scope and process completion separately, and maps cited resource text to connector documents without copying queries or account metadata
 
 ### Fixed
 
