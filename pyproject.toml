@@ -1,6 +1,6 @@
 [project]
 name = "meltify"
-version = "0.5.1"
+version = "0.6.0"
 description = "Melt files of any format into prompt-ready text where every block cites its source"
 readme = "README.md"
 requires-python = ">=3.11.9"
