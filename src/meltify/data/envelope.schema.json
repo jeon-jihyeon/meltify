@@ -278,6 +278,9 @@
                 "text"
               ],
               "properties": {
+                "role": {
+                  "enum": ["metadata", "summary", "sample"]
+                },
                 "text": {
                   "type": "string"
                 }

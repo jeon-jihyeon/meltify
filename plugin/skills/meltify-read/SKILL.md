@@ -89,6 +89,7 @@ The `needs` column lists follow-up work:
   - `ocr pages 2,5`, `ocr`, `ocr 3 images` or `media`: no engine was available, an endpoint stopped answering mid-run, or `--shallow` skipped it. Use the meltify-doctor skill, or rerun without `--shallow`
   - `ocr (budget)` or `media (budget)`: the time budget ran out. Rerun with a higher `--budget`
   - `ocr (failed)`: the engines couldn't read it. Look at the image yourself, then rerun with `--reading` or another engine
+  - `media (failed)`: the speech engine returned an error, so the transcript is missing, not silent. Rerun, since a failure is never cached, or pick another engine with `--asr`
   - `... not read (not drawn under --shallow)`: a picture or slide only OCR could read. Rerun without `--shallow`
   - `no text found`: the engines read every picture or recording of the item and found nothing. It may really be blank. If you expected text, check `--lang`, or open the picture its block links
 - `hidden N spans`: a PDF holds text a reader can't see. Rerun with `--hidden` before quoting that page

@@ -68,6 +68,12 @@ class FakeAsr:
         return [Segment(0.5, 1.5, "안녕하세요 회의 시작합니다")]
 
 
+class FailingAsr(FakeAsr):
+    def transcribe(self, audio, lang):
+        self.calls += 1
+        raise RuntimeError("500 Internal Server Error")
+
+
 @pytest.fixture
 def cached(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -352,6 +358,68 @@ def test_cache_keys_follow_the_model_and_server(cached):
     served["llm"]["openai_model"] = "another-model"
     assert _identity(gpt) != _identity(engines.build("openai", served))
     assert _identity(engines.Vision("ko")) == "vision"
+
+
+def test_a_built_in_remote_engine_is_keyed_on_the_prompt_it_sends(cached, monkeypatch):
+    from meltify import llm
+    from meltify.recognize import _identity
+
+    gemini = engines.build("gemini", config.defaults())
+    before = _identity(gemini)
+    monkeypatch.setattr(llm, "TRANSCRIBE", "Transcribe every line")
+    assert gemini.prompt == "Transcribe every line"
+    assert _identity(gemini) != before
+
+
+def test_a_failed_transcript_is_a_failed_need_and_never_cached(cached, monkeypatch):
+    from meltify.converters import RecognizeJob
+    from meltify.recognize import Options, Recognizer
+
+    speech = FailingAsr()
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): speech)
+    monkeypatch.setattr("meltify.ffmpeg.has_audio", lambda path: True)
+    monkeypatch.setattr("meltify.ffmpeg.audio", lambda path, out, window: out)
+    monkeypatch.setattr(Recognizer, "_shots", lambda self, path: ([2.0], [], 0))
+    talk, screen = cached / "talk.m4a", cached / "screen.mp4"
+    talk.write_bytes(b"talk")
+    screen.write_bytes(b"screen")
+    jobs = [
+        RecognizeJob("audio", Src("talk.m4a"), path=talk),
+        RecognizeJob("video", Src("screen.mp4"), path=screen),
+    ]
+    warned = []
+    opts = Options(frames=0)
+    audio, video = Recognizer(opts, config.defaults(), warned.append).run(jobs)
+    assert (audio.left, audio.blocks) == ("failed", [])
+    # Scenes still come through, while the soundtrack stays a need
+    assert video.left == "failed"
+    assert [b.text for b in video.blocks] == ["scenes: 00:00:02.0"]
+    assert warned == [
+        "fake failed on talk.m4a: RuntimeError: 500 Internal Server Error",
+        "fake failed on screen.mp4: RuntimeError: 500 Internal Server Error",
+    ]
+    again = Recognizer(opts, config.defaults(), warned.append).run(jobs)
+    assert [out.left for out in again] == ["failed", "failed"]
+    assert [b.text for b in again[1].blocks] == ["scenes: 00:00:02.0"]
+    assert speech.calls == 4
+
+
+@needs_ffmpeg
+def test_a_failed_transcript_leaves_the_recording_partial(cached, monkeypatch, capsys):
+    import wave
+
+    monkeypatch.setattr(asr, "select", lambda spec, s, down=frozenset(): FailingAsr())
+    clip = cached / "talk.wav"
+    with wave.open(str(clip), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * 16000)
+    rows, out = _read(capsys, clip)
+    row = rows[str(clip)]
+    assert row["needs"] == ["media (failed)"]
+    assert row["coverage"]["status"] == "partial"
+    assert out["complete"] is False
 
 
 def test_no_engine_keeps_the_01_needs_and_skips_loading(cached, monkeypatch, capsys):

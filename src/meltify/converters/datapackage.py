@@ -39,6 +39,9 @@ MAX_VALUE_CHARS = 2000
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 # Keys the descriptor block shows first, in this order. Every other key follows as it comes
 LEAD = ("name", "title", "created", "sources", "licenses")
+# Keys an object on the descriptor block shows first, so cutting a long value like a query
+# never hides whether the run that wrote the package finished
+STATUS = ("complete", "error")
 # Resource keys rendered as the resource itself rather than in its summary line
 BODY = {"name", "data", "schema", "dialect"}
 TABULAR = {"csv", "tsv"}
@@ -381,7 +384,7 @@ class Reader(Package):
                 shown.append(table.clean(row))
         text = sampled(name, columns, shown, seen if total is None else total)
         at = replace(self.src, sheet=name, cell="row=1" if shown else None)
-        self.out.blocks.append(Block(at, text))
+        self.out.blocks.append(Block(at, text, role="sample"))
 
     def _csv(self, name: str, parts: list[Opener], resource: dict) -> None:
         table = Table(_object(self.root, resource.get("schema"), "schema"))
@@ -429,7 +432,7 @@ class Reader(Package):
             lines = [f"{name}: {head}"]
             lines += [f"row={n}| {_compact(v)}" for n, v in enumerate(shown, start=1)]
             at = replace(self.src, sheet=name, cell="row=1" if shown else None)
-            self.out.blocks.append(Block(at, "\n".join(lines)))
+            self.out.blocks.append(Block(at, "\n".join(lines), role="sample"))
             return
         text = json.dumps(value, ensure_ascii=False)
         if len(text) > MAX_JSON_CHARS:
@@ -527,7 +530,12 @@ def _summary(i: int, resource: Any) -> str:
 def _descriptor(descriptor: dict) -> str:
     keys = [k for k in LEAD if k in descriptor]
     keys += [k for k in descriptor if k not in LEAD and k != "resources"]
-    lines = [f"{k}: {_compact(descriptor[k])}" for k in keys]
+    lines = []
+    for k in keys:
+        value = descriptor[k]
+        if isinstance(value, dict):
+            value = {**{s: value[s] for s in STATUS if s in value}, **value}
+        lines.append(f"{k}: {_compact(value)}")
     resources = descriptor.get("resources")
     if isinstance(resources, list):
         lines.append(f"resources: {len(resources)}")
@@ -554,7 +562,7 @@ def convert(path: Path, src: Src) -> Converted:
         return _as_text(path, src, "no resources list")
 
     out = Converted("datapackage")
-    out.blocks.append(Block(src, _descriptor(descriptor)))
+    out.blocks.append(Block(src, _descriptor(descriptor), role="metadata"))
     reader = Reader(path.parent, src, out)
     for i, resource in enumerate(descriptor["resources"], start=1):
         name = resource.get("name") if isinstance(resource, dict) else None

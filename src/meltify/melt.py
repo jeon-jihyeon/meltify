@@ -251,7 +251,7 @@ class Reader:
             # the last file is read
             row["chars"] = converted.chars
             if self.include_content:
-                row["content"] = [finding(b.src, text=b.text) for b in converted.blocks]
+                row["content"] = [b.content() for b in converted.blocks]
             self._prune_pictures(name, set())
             target.parent.mkdir(parents=True, exist_ok=True)
             converted.write(target, origin)
@@ -461,7 +461,7 @@ class Reader:
             o.row["needs"] = left + o.row["needs"]
             o.row["chars"] = o.converted.chars
             if self.include_content:
-                o.row["content"] = [finding(b.src, text=b.text) for b in o.converted.blocks]
+                o.row["content"] = [b.content() for b in o.converted.blocks]
             o.row["artifacts"] += [
                 finding(j.src, path=str(self.out_dir / link), role="picture")
                 for j, link in zip(mine, links, strict=True)

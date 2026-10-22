@@ -324,9 +324,9 @@ def blocks(table, name: str, src: Src, rows: Src) -> list[Block]:
     """Metadata and summary at `src`, the sample at `rows`"""
     out = []
     if (meta := metadata(table.schema)) is not None:
-        out.append(Block(src, meta))
-    out.append(Block(src, summary(table, name)))
-    out.append(Block(rows, sample(table, name)))
+        out.append(Block(src, meta, role="metadata"))
+    out.append(Block(src, summary(table, name), role="summary"))
+    out.append(Block(rows, sample(table, name), role="sample"))
     return out
 
 
