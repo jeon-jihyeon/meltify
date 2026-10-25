@@ -11,7 +11,8 @@
 
 - `auto` picks the installed local engines and every endpoint, and never a paid one
 - For LLM engines, large images are cut into overlapping tiles of at most `ocr.tile_max` px, because vision APIs shrink anything bigger
-- Models and key variable names come from `meltify.toml`
+- Network engines, endpoints and key variable names come from the user config or a reviewed file selected with `--config FILE`. A discovered `meltify.toml` cannot enable them; its local conversion settings still apply
+- Use `--config` for network settings only when the user intended those engines and destinations. An ignored-setting warning alone is not permission to enable them
 
 ```toml
 lang = "ko"

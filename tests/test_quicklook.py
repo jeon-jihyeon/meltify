@@ -1,4 +1,5 @@
 import contextvars
+import json
 import shutil
 import subprocess
 import sys
@@ -230,7 +231,7 @@ def test_which_previews_are_plain_page_pdfs(tmp_path, html, props, want):
     assert (None if got is None else [p.name for p in got]) == want
 
 
-def _fake_webkit(monkeypatch, pages: list[str], mode: str, hang: bool = False):
+def _fake_webkit(monkeypatch, pages: list[str], mode: str, hang: bool = False, layout=None):
     seen = {}
 
     class Popen:
@@ -239,9 +240,18 @@ def _fake_webkit(monkeypatch, pages: list[str], mode: str, hang: bool = False):
             seen["html"] = Path(args[4]).read_text()
             self.pid = 77
             out = Path(args[5])
-            for i, text in enumerate(pages):
-                _pdf(out / f"{i:04}.pdf", text, 400 * quicklook.ZOOM, 300 * quicklook.ZOOM)
-            stdout.write(mode + "\n")
+            import pymupdf
+
+            with pymupdf.open() as doc:
+                page = doc.new_page(
+                    width=400 * quicklook.ZOOM, height=max(1, len(pages)) * 300 * quicklook.ZOOM
+                )
+                for i, text in enumerate(pages):
+                    if text:
+                        page.insert_text((10, i * 300 * quicklook.ZOOM + 30), text)
+                doc.save(out / "preview.pdf")
+            manifest = {"mode": mode, "rects": [[0, i * 300, 400, 300] for i in range(len(pages))]}
+            stdout.write(json.dumps(manifest if layout is None else layout) + "\n")
 
         def wait(self, timeout=None):
             if hang and timeout is not None:
@@ -284,6 +294,29 @@ def test_blank_bands_past_the_text_are_dropped(tmp_path, monkeypatch):
     _fake_webkit(monkeypatch, ["page text", "", ""], "bands")
     pdf = quicklook.to_pdf(tmp_path / "a.doc", out_dir=tmp_path / "out")
     assert _texts(pdf) == ["page text"]
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {},
+        {"mode": "unknown", "rects": [[0, 0, 400, 300]]},
+        {"mode": "pages", "rects": []},
+        {"mode": "pages", "rects": [[0, 0, 400]]},
+        {"mode": "pages", "rects": [[0, 0, "400", 300]]},
+        {"mode": "pages", "rects": [[0, 0, True, 300]]},
+        {"mode": "pages", "rects": [[0, 0, float("inf"), 300]]},
+        {"mode": "pages", "rects": [[0, 0, -400, 300]]},
+        {"mode": "pages", "rects": [[0, 0, 400, 300], [0, 300, 400, 300]]},
+    ],
+)
+def test_invalid_or_incomplete_page_manifest_rejects_the_whole_render(
+    tmp_path, monkeypatch, layout
+):
+    _fake_qlmanage(monkeypatch, _office)
+    _fake_webkit(monkeypatch, ["first slide"], "pages", layout=layout)
+    assert quicklook.to_pdf(tmp_path / "a.ppt", out_dir=tmp_path / "out") is None
+    assert not (tmp_path / "out/a.pdf").exists()
 
 
 def test_hung_webkit_turns_it_off_for_the_rest_of_the_run(tmp_path, monkeypatch):
@@ -346,3 +379,25 @@ def test_real_quicklook_renders_every_slide_of_a_pptx(tmp_path):
     texts = _texts(pdf)
     assert len(texts) == 2
     assert "Quarterly revenue grew" in texts[0] and "Churn fell in March" in texts[1]
+
+
+@pytest.mark.macos
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not shutil.which("osascript"), reason="needs WebKit and osascript"
+)
+def test_real_webkit_capture_keeps_viewport_dependent_slide_boundaries(tmp_path, monkeypatch):
+    props = {**OFFICE, "Width": 400, "Height": 300}
+    html = (
+        "<html><head><style>body{margin:0}div{width:400px;height:100vh}</style></head><body>"
+        '<div style="background:red">ACME_ONE</div>'
+        '<div style="background:blue">ACME_TWO</div></body></html>'
+    )
+    _fake_qlmanage(monkeypatch, lambda folder: _preview(folder, html, props, {}))
+    pdf = _run().run(lambda: quicklook.to_pdf(tmp_path / "a.ppt", out_dir=tmp_path / "out"))
+    assert pdf is not None and _texts(pdf) == ["ACME_ONE", "ACME_TWO"]
+    import pymupdf
+
+    with pymupdf.open(pdf) as doc:
+        for page, color in zip(doc, [(255, 0, 0), (0, 0, 255)], strict=True):
+            pixels = page.get_pixmap()
+            assert pixels.pixel(pixels.width // 2, pixels.height // 2) == color

@@ -44,7 +44,7 @@ class Endpoint:
 
         # A hosted API must never run unnamed, so only private hosts count as yours
         if not fetch.private_only(self.base_url):
-            return f"an endpoint needs a loopback or private address, not {self.base_url}"
+            return "an endpoint needs a loopback or private address"
         if self.key_env and not os.environ.get(self.key_env):
             return f"export {self.key_env}=..."
         return None
@@ -91,15 +91,25 @@ def bearer(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
-def post(url: str, **kwargs: Any) -> Any:
-    """httpx.post, raising Unreachable when nothing answers at `url`"""
+def post(url: str, *, private: bool = False, **kwargs: Any) -> Any:
     import httpx
 
     try:
-        r = httpx.post(url, **kwargs)
+        if private:
+            from meltify.fetch import private_client
+
+            with private_client() as client:
+                r = client.post(url, **kwargs)
+        else:
+            r = httpx.post(url, **kwargs)
+        r.raise_for_status()
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-        raise Unreachable(f"nothing answers at {url}: {e}") from e
-    r.raise_for_status()
+        raise Unreachable(f"nothing answers at model server: {type(e).__name__}") from None
+    except httpx.HTTPStatusError as e:
+        raise httpx.HTTPError(f"model server returned HTTP {e.response.status_code}") from None
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError) as e:
+        # HTTP errors can quote credential headers or a server-controlled reason phrase
+        raise httpx.HTTPError(f"model request failed: {type(e).__name__}") from None
     return r
 
 
@@ -108,10 +118,15 @@ def answers(base_url: str, api_key: str = "") -> str | None:
     import httpx
 
     try:
-        r = httpx.get(f"{base_url.rstrip('/')}/models", headers=bearer(api_key), timeout=5)
-    except httpx.HTTPError as e:
-        return f"not answering at {base_url}: {type(e).__name__}"
-    return None if r.status_code < 400 else f"http {r.status_code} from {base_url}/models"
+        from meltify.fetch import private_client
+
+        with private_client() as client:
+            r = client.get(f"{base_url.rstrip('/')}/models", headers=bearer(api_key), timeout=5)
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError) as e:
+        return f"model server not answering: {type(e).__name__}"
+    except ValueError:
+        return "endpoint needs loopback or private addresses at connection time"
+    return None if r.status_code < 400 else f"model server returned HTTP {r.status_code}"
 
 
 def _b64(path: Path) -> str:
@@ -149,7 +164,10 @@ def anthropic_vision(image: Path, model: str, api_key: str, prompt: str = TRANSC
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
         timeout=TIMEOUT,
     )
-    return "".join(c.get("text", "") for c in r.json()["content"])
+    try:
+        return "".join(c.get("text", "") for c in r.json()["content"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError("invalid transcription response from model server") from None
 
 
 def gemini_vision(image: Path, model: str, api_key: str, prompt: str = TRANSCRIBE) -> str:
@@ -169,8 +187,11 @@ def gemini_vision(image: Path, model: str, api_key: str, prompt: str = TRANSCRIB
         headers={"x-goog-api-key": api_key},
         timeout=TIMEOUT,
     )
-    parts = r.json()["candidates"][0]["content"]["parts"]
-    return "".join(p.get("text", "") for p in parts)
+    try:
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts)
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        raise ValueError("invalid transcription response from model server") from None
 
 
 def openai_vision(
@@ -180,6 +201,8 @@ def openai_vision(
     base_url: str,
     prompt: str = TRANSCRIBE,
     timeout: float = TIMEOUT,
+    *,
+    private: bool = False,
 ) -> str:
     data_uri = f"data:{_mime(image)};base64,{_b64(image)}"
     body: dict[str, Any] = {
@@ -199,5 +222,12 @@ def openai_vision(
         json=body,
         headers=bearer(api_key),
         timeout=timeout,
+        private=private,
     )
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        text = r.json()["choices"][0]["message"]["content"]
+        if not isinstance(text, str):
+            raise ValueError("content must be text")
+        return text
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise ValueError("invalid transcription response from model server") from None

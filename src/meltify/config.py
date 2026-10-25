@@ -75,6 +75,27 @@ def _unknown(layer: Mapping[str, Any], base: Mapping[str, Any], path: Path) -> l
     return [f"{path}: unknown setting {name}, check the spelling" for name in found]
 
 
+def _local_settings(layer: dict[str, Any], path: Path, warnings: list[str]) -> None:
+    # A received folder must not pick the destination or credentials for network calls
+    restricted = {"llm": None, "ocr": ("engines", "endpoints"), "asr": ("engine", "endpoints")}
+    for section, fields in restricted.items():
+        if section not in layer:
+            continue
+        table = layer[section]
+        if fields is None or not isinstance(table, dict):
+            del layer[section]
+            names = [section]
+        else:
+            names = [f"{section}.{field}" for field in fields if field in table]
+            for field in fields:
+                table.pop(field, None)
+        warnings.extend(
+            f"{path}: ignored {name} from discovered project config;"
+            " review it and pass --config explicitly to enable network settings"
+            for name in names
+        )
+
+
 def _coerce(name: str, raw: str, like: Any) -> Any:
     # The packaged default decides the type, since env values are always plain strings
     if isinstance(like, dict):
@@ -138,18 +159,20 @@ def load(
     settings = copy.deepcopy(known)
     sources = ["defaults"]
 
-    layers: list[Path] = []
+    layers: list[tuple[Path, bool]] = []
     if (u := paths.user_config(env)).is_file():
-        layers.append(u)
+        layers.append((u, True))
     if project is not None:
         if not project.is_file():
             raise ConfigError(f"config file not found: {project}")
-        layers.append(project)
+        layers.append((project, True))
     elif (p := find_project_file(cwd)) is not None:
-        layers.append(p)
+        layers.append((p, False))
     warnings: list[str] = []
-    for path in layers:
+    for path, trusted in layers:
         layer = _read(path)
+        if not trusted:
+            _local_settings(layer, path, warnings)
         warnings += _unknown(layer, known, path)
         _merge(settings, layer)
         sources.append(str(path))

@@ -2,6 +2,20 @@
 
 All notable changes to meltify. Versions follow [semantic versioning](https://semver.org/), and while the major version is 0, a minor release may change behavior.
 
+## 0.5.2
+
+### Changed
+
+- Discovered project configuration no longer enables network engines, endpoints or credential selection. Use user configuration or a reviewed file selected with `--config`.
+- Keep original citations and coverage caveats when a host compresses converted text.
+
+### Fixed
+
+- Private model endpoints validate and pin a checked address for each new socket. Model failures no longer repeat credentials, raw request bodies or malformed response values.
+- A second writer to the same output folder is refused. Result indexes are replaced atomically and a failed index write keeps the previous index. A failed conversion can still leave new output files, so rerun it before consuming the folder.
+- Office Quick Look previews retain page boundaries through one capture and validated page extraction.
+- Security documentation now names the current macOS type check and distinguishes the direct converter timeout from the rendering fallback timeout.
+
 ## 0.5.1
 
 ### Added

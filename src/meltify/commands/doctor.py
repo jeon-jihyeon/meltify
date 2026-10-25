@@ -13,7 +13,7 @@ from typing import Any
 
 from meltify import __version__, paths
 from meltify.evidence import MISSING, Envelope
-from meltify.needs import CELL_NOTE, error_note
+from meltify.needs import error_note
 
 NAME = "doctor"
 HELP = "check the engines, binaries and API keys that read needs"
@@ -454,7 +454,7 @@ def probe(settings: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]
             ok = r.status_code < 400
             detail = f"http {r.status_code} in {time.monotonic() - start:.1f}s"
         except Exception as e:  # noqa: BLE001
-            ok, detail = False, error_note(e, CELL_NOTE)
+            ok, detail = False, f"request failed: {type(e).__name__}"
         rows.append(
             _row(f"probe {name}", ok, detail, "llm engines", "check the key and model name")
         )

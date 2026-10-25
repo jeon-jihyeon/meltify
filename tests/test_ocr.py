@@ -378,7 +378,7 @@ def test_endpoint_tables_fail_loudly(table, message):
 def test_an_endpoint_sends_its_prompt_and_timeout_and_no_key_by_default(monkeypatch, tmp_path):
     seen = {}
 
-    def post(url, json, headers, timeout):
+    def post(self, url, json, headers, timeout):
         seen.update(
             url=url,
             headers=headers,
@@ -391,7 +391,7 @@ def test_an_endpoint_sends_its_prompt_and_timeout_and_no_key_by_default(monkeypa
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx.Client, "post", post)
     vl = engines.build("vl", _served("http://localhost:8111/v1", timeout=300, prompt="OCR:"))
     image = tmp_path / "a.png"
     image.write_bytes(b"png")
@@ -405,10 +405,10 @@ def test_an_endpoint_sends_its_prompt_and_timeout_and_no_key_by_default(monkeypa
 
 
 def test_a_server_that_is_down_is_unreachable(monkeypatch, tmp_path):
-    def post(url, **kwargs):
+    def post(self, url, **kwargs):
         raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx.Client, "post", post)
     image = tmp_path / "a.png"
     image.write_bytes(b"png")
     with pytest.raises(Unreachable, match="nothing answers"):

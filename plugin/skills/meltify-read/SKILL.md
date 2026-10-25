@@ -4,7 +4,7 @@ description: Melt files, folders and URLs of mixed formats, such as PDF, Excel, 
 license: MIT
 compatibility: Needs uv or meltify on PATH. macOS or Linux. Word, PowerPoint, Outlook and EPUB files, plus .xls, .xlsb, .doc and .ppt, need the office extra, 7z and rar the archive extra, Parquet and Arrow the parquet extra, encrypted files the crypto extra. PowerPoint 95 and other binary formats need LibreOffice or, on macOS, Quick Look. Recordings need ffmpeg, video URLs the media extra.
 metadata:
-  version: "0.5.1"
+  version: "0.5.2"
   cli: meltify read
 allowed-tools: Bash(meltify *) Bash(${CLAUDE_SKILL_DIR}/scripts/run *) Read Grep
 ---
@@ -26,6 +26,7 @@ Turn every input into markdown where each block starts with a citation, then wor
    - Never pass `--password`, which other users can see, and never repeat the password in your answer
 7. If `meltify` isn't on PATH, run this skill's `scripts/run read ...` by its full path. In Claude Code that's `${CLAUDE_SKILL_DIR}/scripts/run`.
 8. Output lands in `meltify-out/read/`: one `.md` per item, plus `index.jsonl`. A rerun into the same folder removes the previous markdown of items this run didn't name at all. An item that failed this run keeps its previous markdown, so check its row for an `error` before you quote that file.
+   - Use different `--out` folders for concurrent reads. If a folder is already in use, wait for its writer or choose another folder. Rerun after a command failure before relying on that folder's files
 
 ## Look closer
 - A picture's block starts with a link like `![picture](attachments/memo.docx/pictures/1a2b3c4d5e6f.webp)`, relative to the markdown file. Open it when OCR text can't carry the meaning, like a chart, diagram, photo or layout, and still quote numbers from the cited text. It's scaled to fit 1568 px, so read small print from the text, not the picture
@@ -52,6 +53,8 @@ The same command takes a closer look when one image, PDF or video matters. Each 
 ## Read the output
 
 Every block in the markdown starts with `## <cite>`. Quote that cite, or narrow it down to a line or cell yourself. `references/output.md` lists every row key, row kind, cite format and exit code:
+
+- Keep the original cited output available when the host compresses or extracts it. Preserve `needs`, `disputed`, `hidden`, sample limits and source relationships, and consult the original for missing conditions. A compressed extract is partial working context; do not copy the conversion's `complete` or coverage claims onto a changed body
 
 - Text files melt in blocks of 200 lines, headed `## notes.txt:1`, `## notes.txt:201` and so on
   - Each line starts with its number, like `201| `, so cite that line as `notes.txt:201`

@@ -90,7 +90,7 @@ class Remote:
     def recognize(self, image: Path, size: tuple[int, int]) -> list[TextBox]:
         if (ep := self.endpoint) is not None:
             text = llm.openai_vision(
-                image, ep.model, ep.api_key, ep.base_url, self.prompt, ep.timeout
+                image, ep.model, ep.api_key, ep.base_url, self.prompt, ep.timeout, private=True
             )
         elif self.name == "claude":
             text = llm.anthropic_vision(image, self.model, llm.key(self.key_env), self.prompt)

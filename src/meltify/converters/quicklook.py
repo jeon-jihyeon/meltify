@@ -1,12 +1,14 @@
 """Quick Look renders on macOS, for files no installed program can convert
 
 `qlmanage -p` writes the same preview Finder shows. iWork files come out as one PDF per
-page, slide or sheet. Office files come out as HTML, which WebKit lays out and prints to
-PDF one slide at a time
+page, slide or sheet. Office files come out as HTML, which WebKit captures once before
+the measured pages are split from that PDF
 """
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import plistlib
 import re
@@ -51,8 +53,8 @@ CSP = (
     "content=\"default-src file: data: 'unsafe-inline' 'unsafe-eval'\">"
 )
 
-# Lays out a preview in WKWebView and writes one PDF per page element, or per page-tall
-# band for documents without one. argv: html, out dir, width, height, xpath, zoom
+# One capture avoids WebKit returning no data on a later rectangle of the same view
+# Python splits the measured slide rectangles or page-tall bands from the full PDF
 SCRIPT = r"""
 ObjC.import('Cocoa');
 ObjC.import('WebKit');
@@ -96,7 +98,7 @@ function run(argv) {
   var xpath = argv[4], zoom = +argv[5];
   $.NSApplication.sharedApplication;
   var view = $.WKWebView.alloc.initWithFrameConfiguration(
-    $.NSMakeRect(0, 0, width, height), $.WKWebViewConfiguration.alloc.init);
+    $.NSMakeRect(0, 0, width * zoom, height * zoom), $.WKWebViewConfiguration.alloc.init);
   view.pageZoom = zoom;
   var url = $.NSURL.fileURLWithPath(src);
   view.loadFileURLAllowingReadAccessToURL(url, url.URLByDeletingLastPathComponent);
@@ -108,17 +110,18 @@ function run(argv) {
     if (value && !value.isNil()) found = JSON.parse(ObjC.unwrap(value)); else failed = true;
   });
   if (!wait(function () { return found || failed; }, 10000) || !found) throw new Error('no layout');
-  for (var i = 0; i < found.rects.length; i++) {
-    var r = found.rects[i], config = $.WKPDFConfiguration.alloc.init, done = false;
-    var name = outDir + '/' + ('0000' + i).slice(-4) + '.pdf';
-    config.rect = $.NSMakeRect(r[0] * zoom, r[1] * zoom, r[2] * zoom, r[3] * zoom);
-    view.createPDFWithConfigurationCompletionHandler(config, function (data, error) {
-      if (data && !data.isNil()) data.writeToFileAtomically(name, true);
-      done = true;
-    });
-    if (!wait(function () { return done; }, 30000)) throw new Error('pdf timed out');
-  }
-  return found.mode;
+  var extent = found.rects.reduce(function (size, r) {
+    return [Math.max(size[0], r[0] + r[2]), Math.max(size[1], r[1] + r[3])];
+  }, [width, height]);
+  var config = $.WKPDFConfiguration.alloc.init, done = false, saved = false;
+  config.rect = $.NSMakeRect(0, 0, extent[0] * zoom, extent[1] * zoom);
+  view.createPDFWithConfigurationCompletionHandler(config, function (data, error) {
+    if (data && !data.isNil()) saved = data.writeToFileAtomically(outDir + '/preview.pdf', true);
+    done = true;
+  });
+  if (!wait(function () { return done; }, 30000)) throw new Error('pdf timed out');
+  if (!saved) throw new Error('pdf capture failed');
+  return JSON.stringify(found);
 }
 """
 
@@ -272,7 +275,7 @@ def _webkit(preview: Path, props: dict, out: Path, timeout: float) -> tuple[list
     height = float(props.get("Height") or VIEWPORT[1])
     xpath = str(props.get("PageElementXPath") or "")
     mode = out.parent / "meltify-mode.txt"
-    # osascript prints the script's result, the only way to learn which layout it used
+    # The manifest preserves logical page boundaries through the single PDF capture
     with mode.open("w") as log:
         proc = subprocess.Popen(
             ["osascript", "-l", "JavaScript", str(script), str(page), str(out),
@@ -288,7 +291,36 @@ def _webkit(preview: Path, props: dict, out: Path, timeout: float) -> tuple[list
             return [], False
     if code != 0:
         return [], False
-    return sorted(out.glob("*.pdf")), mode.read_text().strip() == "bands"
+    layout = json.loads(mode.read_text(), parse_int=float)
+    if not isinstance(layout, dict) or layout.get("mode") not in ("pages", "bands"):
+        return [], False
+    rects = layout.get("rects")
+    if not isinstance(rects, list) or not rects:
+        return [], False
+    import pymupdf
+
+    parts = []
+    with run.LOCK, pymupdf.open(out / "preview.pdf") as source:
+        if len(source) != 1:
+            return [], False
+        for i, rect in enumerate(rects):
+            if (
+                not isinstance(rect, list)
+                or len(rect) != 4
+                or any(type(n) not in (int, float) or not math.isfinite(n) for n in rect)
+            ):
+                return [], False
+            x, y, w, h = rect
+            clip = pymupdf.Rect(x * ZOOM, y * ZOOM, (x + w) * ZOOM, (y + h) * ZOOM)
+            if clip.is_empty or not source[0].rect.contains(clip):
+                return [], False
+            part = out / f"{i:04}.pdf"
+            with pymupdf.open() as page:
+                target = page.new_page(width=clip.width, height=clip.height)
+                target.show_pdf_page(target.rect, source, 0, clip=clip)
+                page.save(part)
+            parts.append(part)
+    return parts, layout["mode"] == "bands"
 
 
 def _merge(parts: list[tuple[Path, float]], bands: bool, target: Path) -> Path | None:

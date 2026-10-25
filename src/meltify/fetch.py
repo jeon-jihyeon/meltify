@@ -153,22 +153,27 @@ def check_url(url: str, allow_private: bool) -> None:
 
 class _PinnedBackend(httpcore.SyncBackend):
     # Connect to an address that passed the check, so a second DNS answer can't redirect us
-    def __init__(self, allow_private: bool) -> None:
+    def __init__(self, allow_private: bool, only_private: bool = False) -> None:
         self.allow_private = allow_private
+        self.only_private = only_private
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-        ip = _resolve(host, port, self.allow_private)[0]
-        return super().connect_tcp(ip, port, timeout, local_address, socket_options)
+        ips = _resolve(host, port, self.allow_private)
+        if self.only_private and any(_public(ipaddress.ip_address(ip)) for ip in ips):
+            raise ValueError("endpoint needs loopback or private addresses at connection time")
+        return super().connect_tcp(ips[0], port, timeout, local_address, socket_options)
 
 
-def _client(allow_private: bool) -> httpx.Client:
-    transport = httpx.HTTPTransport()
+def _client(allow_private: bool, *, only_private: bool = False) -> httpx.Client:
+    transport = httpx.HTTPTransport(trust_env=False)
     pool = getattr(transport, "_pool", None)
     # Without the pin a request would already be on its way before the peer check, so an httpx
     # release that moves this attribute has to fail loudly instead of fetching unguarded
     if pool is None or not hasattr(pool, "_network_backend"):
+        if pool is not None:
+            transport.close()
         raise RuntimeError("this httpx version can't pin addresses, so meltify won't fetch URLs")
-    pool._network_backend = _PinnedBackend(allow_private)
+    pool._network_backend = _PinnedBackend(allow_private, only_private)
     # Proxies from the environment would make the peer check see the proxy, not the site
     return httpx.Client(
         transport=transport,
@@ -177,6 +182,10 @@ def _client(allow_private: bool) -> httpx.Client:
         headers={"User-Agent": USER_AGENT},
         timeout=httpx.Timeout(CONNECT_TIMEOUT, connect=CONNECT_TIMEOUT),
     )
+
+
+def private_client() -> httpx.Client:
+    return _client(True, only_private=True)
 
 
 def _peer_ok(response: httpx.Response, allow_private: bool) -> None:
