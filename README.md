@@ -83,7 +83,7 @@ Cites look like this:
 
 | Input | Cite |
 |---|---|
-| PDF text | `report.pdf#p3@pt(72,95,140,103)` |
+| PDF text | `report.pdf#p3` |
 | Image region | `menu.png@px(120,40,380,72)` |
 | Spreadsheet cell | `calendar.xlsx#Calendar!B7` |
 | Archive member | `bundle.zip#att=docs/b.pdf#p3` |
@@ -123,6 +123,7 @@ A few things that happen along the way:
 - Each picture is also saved as a small WebP beside the markdown and linked from its block, so you can look at a chart or photo the text can't capture. `--no-pictures` skips it
 - A file no converter reads gets another shot through LibreOffice, Pillow, ffprobe, or Quick Look on macOS
 - Engine results are cached by content hash, so a rerun only pays for what changed. `--budget` caps new OCR and speech work at 600 seconds by default, and `--shallow` skips it entirely
+- Use different `--out` folders for concurrent reads. A second writer to the same folder fails before conversion; a failed run can leave newly written files, so rerun before consuming that folder
 - Encrypted files open with `--password-file PATH` or `MELTIFY_PASSWORD`. DRM-protected HWP files and pre-2014 binary Hancom files can't be read, and the [reference](https://github.com/jeon-jihyeon/meltify/blob/main/plugin/skills/meltify-read/references/output.md#more-limits) lists the other gaps
 - URLs get the page's main text, or the document or video behind them. Private addresses are refused and `robots.txt` is respected. See [SECURITY.md](https://github.com/jeon-jihyeon/meltify/blob/main/SECURITY.md)
 
@@ -133,7 +134,7 @@ A few things that happen along the way:
 | OCR | Apple Vision on macOS, or a model you serve | Gemini, Claude, any OpenAI-compatible endpoint |
 | Speech | whisper.cpp, or a model you serve | any OpenAI-compatible transcription endpoint |
 
-`auto` only uses local engines and endpoints you serve. Paid engines run when you name them in `meltify.toml` or on the command line. Your agent can also hand in its own reading of an image with `meltify read IMAGE --reading agent=FILE`, and meltify cross-checks it against the local engines, no API key needed.
+`auto` only uses local engines and endpoints you serve. Paid engines run when you name them on the command line, in your user config, or in a reviewed file selected with `--config FILE`. Automatically discovered project files cannot enable network settings. Your agent can also hand in its own reading of an image with `meltify read IMAGE --reading agent=FILE`, and meltify cross-checks it against the local engines, no API key needed.
 
 meltify doesn't bundle or download models. To add one, serve it behind an OpenAI-compatible endpoint and point meltify at it. For example, [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6) on Apple Silicon:
 
@@ -147,7 +148,7 @@ base_url = "http://127.0.0.1:8111/v1"
 model = "PaddlePaddle/PaddleOCR-VL-1.6"
 ```
 
-Each endpoint is an engine named after its table, and `auto` runs it next to Apple Vision with no key. It's still a vision LLM that can guess, so a value it reads counts as agreed only when a local engine like Apple Vision reads it too. Only loopback and private addresses qualify, even when you name the endpoint, so a hosted API runs only as the `claude`, `gemini`, or `openai` engine. `key_env`, `timeout`, and `prompt` are there when a server needs them, `[asr.endpoints.NAME]` does the same for speech without `prompt`, and `meltify doctor` checks that each one answers.
+Put these settings in your user config, or review `meltify.toml` and select it explicitly with `--config meltify.toml` for both `read` and `doctor`. Each endpoint is an engine named after its table, and `auto` runs it next to Apple Vision with no key. It's still a vision LLM that can guess, so a value it reads counts as agreed only when a local engine like Apple Vision reads it too. Only loopback and private addresses qualify, even when you name the endpoint, so a hosted API runs only as the `claude`, `gemini`, or `openai` engine. `key_env`, `timeout`, and `prompt` are there when a server needs them, and `[asr.endpoints.NAME]` does the same for speech without `prompt`.
 
 Agreement means the engines read the same value, not that the value is right, and a value only LLM engines read is never marked agreed. With a single engine every reading is marked `unchecked`, and on Linux, where there's no Apple Vision, LLM readings stay unchecked or disputed.
 
@@ -172,6 +173,8 @@ Settings stack up from lowest to highest precedence:
 3. The nearest `meltify.toml`, from the working directory up to the git root, or the file passed with `--config`
 4. `MELTIFY_<KEY>` and `MELTIFY_<SECTION>_<KEY>` environment variables
 5. Command-line flags
+
+An automatically discovered project file applies local conversion settings, but its `llm`, `ocr.engines`, `ocr.endpoints`, `asr.engine` and `asr.endpoints` settings are ignored with a warning. Review the file and pass `--config FILE` to opt in to those network settings. This prevents a received folder from choosing a destination or credential environment variable for you.
 
 [examples/meltify.toml](https://github.com/jeon-jihyeon/meltify/blob/main/examples/meltify.toml) shows the settings you're most likely to change, and [defaults.toml](https://github.com/jeon-jihyeon/meltify/blob/main/src/meltify/data/defaults.toml) lists every one. Misspelled keys show up as warnings. A few worth knowing:
 

@@ -10,7 +10,7 @@ The data directory below is `$CLAUDE_PLUGIN_DATA` when the plugin sets it, else 
 
 - `read --engines` with the `claude`, `gemini` or `openai` engine uploads each prepared image or its tiles to that provider
 - `read --asr api` uploads the extracted audio to the configured transcription endpoint
-- With `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]`, plain `read` sends images or audio to the servers you configured, and `doctor` asks each for its model list. meltify only accepts hosts that resolve to loopback or private addresses, so a hosted API never gets data you didn't name it for. The check runs when the run starts and isn't pinned per request, so use an IP or a host name you control
+- With `[ocr.endpoints.NAME]` or `[asr.endpoints.NAME]`, plain `read` sends images or audio to the servers you configured, and `doctor` asks each for its model list. meltify only accepts hosts that resolve to loopback or private addresses, so a hosted API never gets data you didn't name it for. Each new socket checks DNS again and connects to a checked numeric IP. Reused connections do not resolve the host again for every request, so use an IP or a host name you control
 - `doctor --probe` makes one tiny request per configured key
 - `read` with a URL fetches that URL, its redirects and the site's `robots.txt`. With `--render`, the headless browser also loads the page's scripts, styles and API calls
 - `read` with a video URL downloads the video and its subtitles through yt-dlp
@@ -76,8 +76,8 @@ Some formats need a program outside Python. Each one runs with an argument list 
 - 7-Zip `7zz`, `7z` or `7za` lists and extracts 7z and RAR members to stdout, with a 60 second listing and a 900 second extraction timeout. `bsdtar` is the last resort for archives libarchive and 7-Zip can't open
 - `wpd2text` from libwpd reads WordPerfect files, with a 120 second timeout
 - `ffprobe` checks whether a file no converter claims holds audio or video, with a 20 second timeout. It only runs on files whose first bytes look like an audio or video container
-- On macOS, `mdls` checks that Spotlight treats a file as a document or picture (`public.content`), with a 10 second timeout, and only then does `qlmanage` draw a preview of it, killed after 30 seconds
-- On macOS, an Office preview that Quick Look writes as HTML is laid out by WebKit through `osascript`, under a content security policy that blocks every remote load. It's killed after 120 seconds
+- On macOS, `NSWorkspace` checks through `osascript` that a file is a document or picture (`public.content`), with a 10 second timeout, and only then does `qlmanage` draw a preview of it, killed after 30 seconds
+- On macOS, an Office preview that Quick Look writes as HTML is laid out by WebKit through `osascript`, under a content security policy that blocks every remote load. The rendering fallback passes a 120 second timeout; direct Quick Look conversion defaults to 60 seconds
 - On macOS, `textutil` and `mdimport` read the text Spotlight indexes for a fallback file, with a 30 second timeout. `mdimport` only runs on files Spotlight counts as `public.content`
 - The rendering fallback only runs for binary files no converter reads, and for Word, Excel and PowerPoint binaries, HWP and iWork files whose parser gives up. Compiled programs and files of one repeated byte never reach any of these programs, and encrypted and DRM-locked files are never rendered
 - `read.fallback = false` turns the fallback off, and `render.quicklook = false` keeps Quick Look out of every format
