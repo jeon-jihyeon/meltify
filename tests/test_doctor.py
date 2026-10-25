@@ -71,17 +71,17 @@ def test_an_endpoint_is_ready_only_when_its_server_answers(monkeypatch):
     settings = config.defaults()
     settings["ocr"]["endpoints"] = {"vl": {"base_url": "http://127.0.0.1:9/v1", "model": "m"}}
 
-    def down(url, **kwargs):
+    def down(self, url, **kwargs):
         raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr(httpx, "get", down)
+    monkeypatch.setattr(httpx.Client, "get", down)
     row = next(r for r in doctor.engines(settings) if r["check"] == "ocr vl")
     assert not row["ok"] and "not answering" in row["hint"]
 
-    def up(url, **kwargs):
+    def up(self, url, **kwargs):
         return httpx.Response(200, json={"data": []})
 
-    monkeypatch.setattr(httpx, "get", up)
+    monkeypatch.setattr(httpx.Client, "get", up)
     assert next(r for r in doctor.engines(settings) if r["check"] == "ocr vl")["ok"]
 
 

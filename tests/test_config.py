@@ -90,7 +90,7 @@ def test_endpoint_tables_come_from_files_not_env(tmp_path, home):
         tmp_path / "meltify.toml",
         '[ocr.endpoints.vl]\nbase_url = "http://127.0.0.1:8111/v1"\nmodel = "ocr-vl"\n',
     )
-    s = config.load(cwd=tmp_path, env=home)
+    s = config.load(cwd=tmp_path, env=home, project=tmp_path / "meltify.toml")
     assert s["ocr"]["endpoints"]["vl"]["model"] == "ocr-vl"
     assert not s["_warnings"]
     with pytest.raises(config.ConfigError, match="config file"):
@@ -101,7 +101,7 @@ def test_a_bad_endpoint_table_fails_read_before_any_output(tmp_path, home, monke
     monkeypatch.chdir(tmp_path)
     (tmp_path / "notes.txt").write_text("hello\n")
     _write(tmp_path / "meltify.toml", '[ocr.endpoints.vl]\nbase_url = "http://127.0.0.1/v1"\n')
-    assert cli.main(["read", "notes.txt", "--json"]) == 2
+    assert cli.main(["read", "notes.txt", "--config", "meltify.toml", "--json"]) == 2
     assert "needs base_url and model" in capsys.readouterr().out
     assert not (tmp_path / "meltify-out").exists()
 

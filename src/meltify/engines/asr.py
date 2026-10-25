@@ -85,10 +85,18 @@ class Api:
                 files={"file": (audio.name, f, "audio/wav")},
                 headers=llm.bearer(api_key),
                 timeout=SPEECH_TIMEOUT if ep is None else ep.timeout,
+                private=ep is not None,
             )
-        body = r.json()
-        segments = body.get("segments") or [{"start": 0, "end": 0, "text": body.get("text", "")}]
-        return [Segment(float(s["start"]), float(s["end"]), s["text"].strip()) for s in segments]
+        try:
+            body = r.json()
+            segments = body.get("segments") or [
+                {"start": 0, "end": 0, "text": body.get("text", "")}
+            ]
+            return [
+                Segment(float(s["start"]), float(s["end"]), s["text"].strip()) for s in segments
+            ]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ValueError("invalid transcription response from model server") from None
 
 
 # A long recording takes minutes to transcribe in one request
