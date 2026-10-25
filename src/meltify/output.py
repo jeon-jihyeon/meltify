@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import sys
+import tempfile
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -44,6 +48,48 @@ def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     with path.open("a", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def replace_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=".index-", delete=False
+    ) as f:
+        temp = Path(f.name)
+        try:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+
+@contextmanager
+def exclusive(directory: Path) -> Iterator[None]:
+    import errno
+    import fcntl
+
+    directory.mkdir(parents=True, exist_ok=True)
+    fd = os.open(
+        directory / ".meltify.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("output lock must be a regular file; choose a different --out folder")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            if e.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            raise ValueError(
+                "output folder is already in use; choose a different --out folder"
+            ) from None
+        yield
+    finally:
+        # Keep the inode so a later writer cannot lock a replacement while another holds it
+        os.close(fd)
 
 
 def emit(

@@ -18,7 +18,7 @@ from meltify.evidence import Envelope, Src
 from meltify.files import Pages, common_root, flat_names, iter_files
 from meltify.melt import DETAIL, Reader
 from meltify.needs import count
-from meltify.output import append_jsonl
+from meltify.output import exclusive, replace_jsonl
 from meltify.passwords import given_password
 from meltify.pdfpool import PdfPool
 
@@ -332,26 +332,27 @@ def _run(args: argparse.Namespace, settings: dict[str, Any], password: str | Non
     if recognizer is not None:
         recognizer.check_named(ocr=args.engines is not None, asr=args.asr is not None)
     try:
-        rows = _convert_all(reader, files, urls, jobs)
-        if args.reading and (n := reader.pictures()) != 1:
-            # A reading describes one picture, so it can't be compared with none or several
-            raise ValueError(
-                f"--reading needs exactly one image or OCR'd PDF page, got {n}."
-                " Add --ocr-pages for a page with a text layer"
+        with exclusive(out_dir):
+            rows = _convert_all(reader, files, urls, jobs)
+            if args.reading and (n := reader.pictures()) != 1:
+                # A reading describes one picture, so it can't be compared with none or several
+                raise ValueError(
+                    f"--reading needs exactly one image or OCR'd PDF page, got {n}."
+                    " Add --ocr-pages for a page with a text layer"
+                )
+            started = time.monotonic()
+            rows += reader.finish(recognizer.run if recognizer else None)
+            rows.sort(key=lambda r: r["cite"])
+            _coverage(rows, scope)
+            env.complete = all(
+                r["coverage"]["status"] == "complete" for r in rows if r["kind"] not in DETAIL
             )
-        started = time.monotonic()
-        rows += reader.finish(recognizer.run if recognizer else None)
+            _write_index(env, out_dir / "index.jsonl", rows)
+            _summarize(env, out_dir, rows, recognizer, started, reader.unchecked)
+            if args.hidden:
+                _hidden_notes(env, rows, args.contrast, reader.hidden_unchecked)
     finally:
         temps.remove()
-    rows.sort(key=lambda r: r["cite"])
-    _coverage(rows, scope)
-    env.complete = all(
-        r["coverage"]["status"] == "complete" for r in rows if r["kind"] not in DETAIL
-    )
-    _write_index(env, out_dir / "index.jsonl", rows)
-    _summarize(env, out_dir, rows, recognizer, started, reader.unchecked)
-    if args.hidden:
-        _hidden_notes(env, rows, args.contrast, reader.hidden_unchecked)
     return env
 
 
@@ -499,9 +500,8 @@ def _coverage(rows: list[dict[str, Any]], scope: dict[str, Any]) -> None:
 
 
 def _write_index(env: Envelope, index: Path, rows: list[dict[str, Any]]) -> None:
+    replace_jsonl(index, rows)
     drop_stale(index.parent, rows)
-    index.unlink(missing_ok=True)
-    append_jsonl(index, rows)
     env.results = rows
     env.artifact(str(index), "results")
     added = {c for r in rows if r["kind"] in DETAIL for c in DETAIL[r["kind"]][1]}
